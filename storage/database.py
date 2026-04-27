@@ -76,12 +76,22 @@ def init_db():
     con.close()
 
 
+def _upsert(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, pk: str = "id"):
+    df = df.drop_duplicates(subset=[pk], keep="last")
+    cols = ", ".join(df.columns)
+    ids = df[pk].tolist()
+    if ids:
+        placeholders = ", ".join(["?" for _ in ids])
+        con.execute(f"DELETE FROM {table} WHERE {pk} IN ({placeholders})", ids)
+    con.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM df")
+
+
 def upsert_filings(records: list[dict]):
     if not records:
         return
     con = get_connection()
     df = pd.DataFrame(records)
-    con.execute("INSERT OR REPLACE INTO raw_filings SELECT * FROM df")
+    _upsert(con, "raw_filings", df)
     con.close()
 
 
@@ -90,7 +100,7 @@ def upsert_financials(records: list[dict]):
         return
     con = get_connection()
     df = pd.DataFrame(records)
-    con.execute("INSERT OR REPLACE INTO financials SELECT * FROM df")
+    _upsert(con, "financials", df)
     con.close()
 
 
@@ -99,7 +109,7 @@ def upsert_signals(records: list[dict]):
         return
     con = get_connection()
     df = pd.DataFrame(records)
-    con.execute("INSERT OR REPLACE INTO filing_signals SELECT * FROM df")
+    _upsert(con, "filing_signals", df)
     con.close()
 
 
@@ -108,7 +118,7 @@ def upsert_indicators(records: list[dict]):
         return
     con = get_connection()
     df = pd.DataFrame(records)
-    con.execute("INSERT OR REPLACE INTO indicators SELECT * FROM df")
+    _upsert(con, "indicators", df)
     con.close()
 
 

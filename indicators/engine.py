@@ -213,5 +213,5 @@ def run():
     summary = merged[["sector", "composite_score"]].sort_values(
         "composite_score", ascending=False
     )
-    print("\n── SME Health Score by Sector ──")
+    print("\n-- SME Health Score by Sector --")
     print(summary.to_string(index=False))

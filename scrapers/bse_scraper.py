@@ -44,18 +44,11 @@ def _filing_id(exchange: str, company_code: str, filing_date: str, headline: str
     return hashlib.md5(raw.encode()).hexdigest()
 
 
-def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
-    """Fetch corporate announcements for BSE SME Emerge companies."""
-    to_date = date.today()
-    from_date = to_date - timedelta(days=days_back)
-
-    print(f"[BSE] Scraping announcements from {from_date} to {to_date}")
-
-    records = []
-    # BSE announcement API — segment=BE targets SME Emerge
-    url = f"{BSE_API_BASE}/AnnSubCategoryGetData/w"
-    params = {
-        "strCat": "-1",
+def _scrape_ann_get_data(str_cat: str, from_date: date, to_date: date, label: str) -> list[dict]:
+    """Fetch filings from BSE AnnGetData endpoint with pagination."""
+    url = f"{BSE_API_BASE}/AnnGetData/w"
+    base_params = {
+        "strCat": str_cat,
         "strPrevDate": from_date.strftime("%Y%m%d"),
         "strScrip": "",
         "strSearch": "P",
@@ -64,42 +57,64 @@ def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
         "subcategory": "-1",
     }
 
-    data = _get(url, params)
-    if not data:
-        print("[BSE] No data returned from announcements API, falling back to HTML")
+    records = []
+    page = 1
+    while True:
+        params = {**base_params, "pageno": page}
+        data = _get(url, params)
+        if not data:
+            break
+
+        items = data if isinstance(data, list) else data.get("Table", [])
+        if not items:
+            break
+
+        for item in items:
+            company_code = str(item.get("SCRIP_CD", "")).strip()
+            company_name = str(item.get("SLONGNAME", "")).strip()
+            filing_date_raw = str(item.get("NEWS_DT", "")).strip()[:10]
+            headline = str(item.get("NEWSSUB", "")).strip()
+            category = (item.get("CATEGORYNAME") or "").strip()
+            pdf_url = ""
+            attach = str(item.get("ATTACHMENTNAME", "")).strip()
+            if attach:
+                pdf_url = f"{BSE_BASE}/xml-data/corpfiling/AttachLive/{attach}"
+
+            rec = {
+                "id": _filing_id("BSE", company_code, filing_date_raw, headline),
+                "exchange": "BSE",
+                "company_code": company_code,
+                "company_name": company_name,
+                "filing_date": filing_date_raw or None,
+                "category": category,
+                "subcategory": "",
+                "headline": headline,
+                "pdf_url": pdf_url,
+                "pdf_local": None,
+                "raw_json": json.dumps(item),
+                "scraped_at": None,
+            }
+            records.append(rec)
+
+        total_pages = items[0].get("TotalPageCnt", 1) if items else 1
+        if page >= total_pages:
+            break
+        page += 1
+        time.sleep(REQUEST_DELAY)
+
+    print(f"[BSE] Fetched {len(records)} {label} records")
+    return records
+
+
+def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
+    """Fetch corporate announcements for BSE companies."""
+    to_date = date.today()
+    from_date = to_date - timedelta(days=days_back)
+    print(f"[BSE] Scraping announcements from {from_date} to {to_date}")
+    records = _scrape_ann_get_data("-1", from_date, to_date, "announcement")
+    if not records:
+        print("[BSE] No data from announcements API, falling back to HTML")
         return _scrape_announcements_html(from_date, to_date)
-
-    items = data if isinstance(data, list) else data.get("Table", [])
-    for item in items:
-        company_code = str(item.get("SCRIP_CD", "")).strip()
-        company_name = str(item.get("SLONGNAME", "")).strip()
-        filing_date_raw = str(item.get("NEWS_DT", "")).strip()[:10]
-        headline = str(item.get("NEWSSUB", "")).strip()
-        category = str(item.get("CATEGORYNAME", "")).strip()
-        subcategory = str(item.get("SUBCATNAME", "")).strip()
-        pdf_url = ""
-        attach = str(item.get("ATTACHMENTNAME", "")).strip()
-        if attach:
-            pdf_url = f"{BSE_BASE}/xml-data/corpfiling/AttachLive/{attach}"
-
-        rec = {
-            "id": _filing_id("BSE", company_code, filing_date_raw, headline),
-            "exchange": "BSE",
-            "company_code": company_code,
-            "company_name": company_name,
-            "filing_date": filing_date_raw or None,
-            "category": category,
-            "subcategory": subcategory,
-            "headline": headline,
-            "pdf_url": pdf_url,
-            "pdf_local": None,
-            "raw_json": json.dumps(item),
-            "scraped_at": None,
-        }
-        records.append(rec)
-        time.sleep(0.05)
-
-    print(f"[BSE] Fetched {len(records)} announcement records")
     return records
 
 
@@ -145,53 +160,8 @@ def scrape_financial_results(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
     """Fetch financial result filings from BSE."""
     to_date = date.today()
     from_date = to_date - timedelta(days=days_back)
-
     print(f"[BSE] Scraping financial results from {from_date} to {to_date}")
-
-    url = f"{BSE_API_BASE}/getFinancialResults/w"
-    params = {
-        "Fyear": "",
-        "Qtype": "quartly",
-        "scripcode": "",
-        "segment": "",
-        "strSearch": "P",
-    }
-
-    data = _get(url, params)
-    records = []
-    items = []
-    if data:
-        items = data if isinstance(data, list) else data.get("Table", [])
-
-    for item in items:
-        company_code = str(item.get("SCRIPCODE", "")).strip()
-        company_name = str(item.get("SCRIP_NAME", "")).strip()
-        filing_date_raw = str(item.get("SUBMISSION_DATE", "")).strip()[:10]
-        headline = f"Financial Results - {item.get('PERIOD', '')}"
-        pdf_url = ""
-        attach = str(item.get("FILENAME", "")).strip()
-        if attach:
-            pdf_url = f"{BSE_BASE}/xml-data/corpfiling/AttachLive/{attach}"
-
-        rec = {
-            "id": _filing_id("BSE", company_code, filing_date_raw, headline),
-            "exchange": "BSE",
-            "company_code": company_code,
-            "company_name": company_name,
-            "filing_date": filing_date_raw or None,
-            "category": "Results",
-            "subcategory": item.get("PERIOD", ""),
-            "headline": headline,
-            "pdf_url": pdf_url,
-            "pdf_local": None,
-            "raw_json": json.dumps(item),
-            "scraped_at": None,
-        }
-        records.append(rec)
-        time.sleep(0.05)
-
-    print(f"[BSE] Fetched {len(records)} financial result records")
-    return records
+    return _scrape_ann_get_data("Result", from_date, to_date, "financial result")
 
 
 def run(days_back: int = DEFAULT_DAYS_BACK):
