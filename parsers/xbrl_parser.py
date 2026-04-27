@@ -11,7 +11,7 @@ from typing import Optional
 import requests
 from lxml import etree
 
-from config import REQUEST_TIMEOUT
+from config import REQUEST_TIMEOUT, BATCH_SIZE
 from storage.database import upsert_financials
 
 HEADERS = {
@@ -128,21 +128,24 @@ def parse_filing(filing_id: str, company_code: str, company_name: str,
     }
 
 
-def _xbrl_url_from_pdf_url(pdf_url: str) -> str:
+def _xbrl_url_candidates(pdf_url: str) -> list[str]:
     """
-    BSE/NSE often host XBRL alongside PDF with same base name.
-    Attempt to derive XBRL URL from PDF URL.
+    BSE/NSE often host XBRL alongside the PDF with the same base name.
+    Return candidate URLs to try in order (.xml preferred, .xbrl as fallback).
     """
     if not pdf_url:
-        return ""
-    return pdf_url.replace(".pdf", ".xml").replace(".PDF", ".xml")
+        return []
+    base = re.sub(r"\.(pdf|PDF)$", "", pdf_url)
+    candidates = [base + ".xml", base + ".xbrl"]
+    # deduplicate while preserving order
+    return list(dict.fromkeys(candidates))
 
 
 def run():
     """Parse XBRL for all Results filings not yet in financials table."""
     from storage.database import query
 
-    pending = query("""
+    pending = query(f"""
         SELECT rf.id, rf.company_code, rf.company_name, rf.exchange,
                rf.pdf_url, rf.filing_date, rf.subcategory
         FROM raw_filings rf
@@ -151,23 +154,26 @@ def run():
           AND rf.pdf_url IS NOT NULL
           AND rf.pdf_url != ''
           AND f.filing_id IS NULL
-        LIMIT 200
+        LIMIT {BATCH_SIZE}
     """)
 
     print(f"[XBRL] Processing {len(pending)} result filings")
     records = []
 
     for _, row in pending.iterrows():
-        xbrl_url = _xbrl_url_from_pdf_url(row["pdf_url"])
-        rec = parse_filing(
-            filing_id=row["id"],
-            company_code=row["company_code"],
-            company_name=str(row.get("company_name", "")),
-            exchange=row["exchange"],
-            xbrl_url=xbrl_url,
-            period_end=str(row["filing_date"]),
-            period_type="Q" if "quarter" in str(row.get("subcategory", "")).lower() else "A",
-        )
+        rec = None
+        for xbrl_url in _xbrl_url_candidates(row["pdf_url"]):
+            rec = parse_filing(
+                filing_id=row["id"],
+                company_code=row["company_code"],
+                company_name=str(row.get("company_name", "")),
+                exchange=row["exchange"],
+                xbrl_url=xbrl_url,
+                period_end=str(row["filing_date"]),
+                period_type="Q" if "quarter" in str(row.get("subcategory", "")).lower() else "A",
+            )
+            if rec:
+                break
         if rec:
             records.append(rec)
 

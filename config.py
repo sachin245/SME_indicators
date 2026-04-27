@@ -27,6 +27,9 @@ MAX_RETRIES = 3
 # Default lookback window for scraping (days)
 DEFAULT_DAYS_BACK = 90
 
+# Max filings processed per parser run
+BATCH_SIZE = 200
+
 # BSE SME segment code
 BSE_SME_SEGMENT = "BE"   # BSE SME Emerge segment marker
 

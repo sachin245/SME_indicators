@@ -14,8 +14,8 @@ import pdfplumber
 import fitz  # PyMuPDF
 import requests
 
-from config import PDF_CACHE_DIR, REQUEST_TIMEOUT, KEYWORDS
-from storage.database import query, upsert_signals
+from config import PDF_CACHE_DIR, REQUEST_TIMEOUT, KEYWORDS, BATCH_SIZE
+from storage.database import query, upsert_signals, upsert_financials
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -126,55 +126,86 @@ def scan_keywords(text: str) -> dict:
 
 
 def parse_filing(filing_id: str, company_code: str, filing_date: str,
-                 pdf_url: str, sector: str = "Unknown") -> Optional[dict]:
-    """Download and parse a single filing PDF. Returns a signal record."""
+                 pdf_url: str, sector: str = "Unknown",
+                 company_name: str = "", exchange: str = "") -> tuple[Optional[dict], Optional[dict]]:
+    """Download and parse a single filing PDF.
+    Returns (signals_record, financials_record) — either may be None."""
     local = download_pdf(pdf_url)
     if not local:
-        return None
+        return None, None
 
     text = extract_text(local)
     signals = scan_keywords(text)
 
-    record = {
+    signal_record = {
         "id": filing_id,
         "filing_id": filing_id,
         "company_code": company_code,
         "filing_date": filing_date,
         "sector": sector,
         **signals,
-        "raw_text": text[:5000],  # store first 5k chars to keep DB lean
+        "raw_text": text[:5000],
     }
-    return record
+
+    tables = extract_tables(local)
+    fin = _find_financial_in_tables(tables)
+    fin_record = None
+    if any(v is not None for v in fin.values()):
+        fin_record = {
+            "id": hashlib.md5(f"{filing_id}|{filing_date}".encode()).hexdigest(),
+            "filing_id": filing_id,
+            "company_code": company_code,
+            "company_name": company_name,
+            "exchange": exchange,
+            "period_end": filing_date,
+            "period_type": "Q",
+            "sector": sector,
+            **fin,
+        }
+
+    return signal_record, fin_record
 
 
 def run():
     """Parse all unprocessed filings in raw_filings that have a pdf_url."""
-    pending = query("""
-        SELECT rf.id, rf.company_code, rf.filing_date, rf.pdf_url
+    pending = query(f"""
+        SELECT rf.id, rf.company_code, rf.company_name, rf.exchange,
+               rf.filing_date, rf.pdf_url
         FROM raw_filings rf
         LEFT JOIN filing_signals fs ON rf.id = fs.filing_id
         WHERE rf.pdf_url IS NOT NULL
           AND rf.pdf_url != ''
           AND fs.filing_id IS NULL
-        LIMIT 200
+        LIMIT {BATCH_SIZE}
     """)
 
     print(f"[PDF] Processing {len(pending)} unprocessed filings")
-    records = []
+    signal_records = []
+    fin_records = []
 
     for _, row in pending.iterrows():
-        rec = parse_filing(
+        sig, fin = parse_filing(
             filing_id=row["id"],
             company_code=row["company_code"],
             filing_date=str(row["filing_date"]),
             pdf_url=row["pdf_url"],
+            company_name=str(row.get("company_name", "") or ""),
+            exchange=str(row.get("exchange", "") or ""),
         )
-        if rec:
-            records.append(rec)
+        if sig:
+            signal_records.append(sig)
+        if fin:
+            fin_records.append(fin)
         time.sleep(0.1)
 
-    if records:
-        upsert_signals(records)
-        print(f"[PDF] Saved signals for {len(records)} filings")
+    if signal_records:
+        upsert_signals(signal_records)
+        print(f"[PDF] Saved signals for {len(signal_records)} filings")
     else:
         print("[PDF] No new signals to save")
+
+    if fin_records:
+        upsert_financials(fin_records)
+        print(f"[PDF] Saved financials for {len(fin_records)} filings")
+    else:
+        print("[PDF] No financial tables found in PDFs")
