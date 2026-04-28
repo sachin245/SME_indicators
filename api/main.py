@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from api.routers import indicators, filings, financials, summary, pipeline
 
@@ -13,6 +16,8 @@ app.add_middleware(
         "http://localhost:5175",
         "http://localhost:4173",
         "http://98.81.94.194",
+        "http://192.168.1.37",
+        "http://192.168.1.37:6002",
     ],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -28,3 +33,9 @@ app.include_router(pipeline.router, prefix="/api")
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# Serve React SPA — must be last so API routes take precedence
+_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if _dist.exists():
+    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="frontend")

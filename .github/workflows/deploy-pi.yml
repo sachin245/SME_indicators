@@ -1,0 +1,51 @@
+name: Deploy to Raspberry Pi
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-pi:
+    name: Deploy to Raspberry Pi (port 6002)
+    runs-on: [self-hosted, raspberry-pi]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build React frontend
+        run: |
+          cd frontend
+          npm ci --silent
+          npm run build
+
+      - name: Sync app files to deployment directory
+        run: |
+          mkdir -p ~/apps/sme-indicators/frontend
+          rsync -a --delete api/          ~/apps/sme-indicators/api/
+          rsync -a --delete indicators/   ~/apps/sme-indicators/indicators/
+          rsync -a --delete parsers/      ~/apps/sme-indicators/parsers/
+          rsync -a --delete scrapers/     ~/apps/sme-indicators/scrapers/
+          rsync -a --delete storage/      ~/apps/sme-indicators/storage/
+          rsync -a --delete frontend/dist/ ~/apps/sme-indicators/frontend/dist/
+          cp config.py agent.py requirements.pi.txt ~/apps/sme-indicators/
+
+      - name: Install Python dependencies
+        run: |
+          cd ~/apps/sme-indicators
+          [ -d venv ] || python3 -m venv venv
+          ./venv/bin/pip install --quiet -r requirements.pi.txt
+
+      - name: Restart with PM2
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          . "$NVM_DIR/nvm.sh"
+          pm2 restart sme-indicators 2>/dev/null || \
+          pm2 start ~/apps/sme-indicators/ecosystem.config.cjs
+          pm2 save
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -sf http://localhost:6002/api/health && echo "Health check passed"
