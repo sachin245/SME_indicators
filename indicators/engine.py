@@ -5,13 +5,14 @@ Results are aggregated by sector and stored in the `indicators` table.
 """
 
 import hashlib
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import numpy as np
 
 from config import INDICATOR_WEIGHTS
 from storage.database import query, upsert_indicators
+from storage.sectors import backfill_sectors
 
 
 def _indicator_id(sector: str, as_of_date: str) -> str:
@@ -19,10 +20,21 @@ def _indicator_id(sector: str, as_of_date: str) -> str:
 
 
 def _normalize(series: pd.Series, invert: bool = False) -> pd.Series:
-    """Min-max normalize to 0–100. Invert for stress indicators."""
+    """Min-max normalize to 0–100. Invert for stress indicators.
+
+    When all values in the series are equal (single sector, or genuinely tied),
+    fall back to a domain-anchored score rather than a flat 50:
+      - For positive metrics: score = 50 + sign(value) * 15  (60 if positive,
+        40 if negative, 50 if exactly zero).
+      - For inverted (stress) metrics: 50 - sign(value) * 15.
+    This surfaces direction even when relative ranking is impossible.
+    """
     mn, mx = series.min(), series.max()
     if mx == mn:
-        return pd.Series(50.0, index=series.index)
+        v = float(mn) if pd.notna(mn) else 0.0
+        sign = 1 if v > 0 else (-1 if v < 0 else 0)
+        anchor = 50 + sign * 15 if not invert else 50 - sign * 15
+        return pd.Series(float(anchor), index=series.index)
     norm = (series - mn) / (mx - mn) * 100
     return (100 - norm) if invert else norm
 
@@ -167,6 +179,15 @@ def compute_composite(merged: pd.DataFrame) -> pd.Series:
 
 def run():
     """Compute all indicators and persist to the indicators table."""
+    print("[Engine] Backfilling sectors before computation…")
+    try:
+        stats = backfill_sectors()
+        print(f"[Engine] Sector backfill: {stats['filing_signals_updated']} signals, "
+              f"{stats['financials_updated']} financials updated across "
+              f"{stats['companies_classified']} companies")
+    except Exception as exc:
+        print(f"[Engine] Sector backfill failed (continuing): {exc}")
+
     print("[Engine] Computing indicators...")
 
     frames = [
@@ -194,7 +215,7 @@ def run():
     merged["id"] = merged.apply(
         lambda r: _indicator_id(r["sector"], r["as_of_date"]), axis=1
     )
-    merged["computed_at"] = None
+    merged["computed_at"] = datetime.now()
 
     cols = [
         "id", "sector", "as_of_date",

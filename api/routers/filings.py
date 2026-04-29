@@ -95,7 +95,9 @@ def get_filings(
 @router.get("/filings/categories")
 def list_categories():
     return execute_query(
-        "SELECT DISTINCT category FROM raw_filings WHERE category IS NOT NULL ORDER BY category"
+        "SELECT DISTINCT category FROM raw_filings "
+        "WHERE category IS NOT NULL AND TRIM(category) <> '' "
+        "ORDER BY category"
     )
 
 

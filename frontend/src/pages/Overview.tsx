@@ -3,6 +3,7 @@ import { Building2, FileText, TrendingUp } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
+import DataHealthBanner from '../components/DataHealthBanner'
 import GlobalFilterBar from '../components/GlobalFilterBar'
 import ScoreGauge from '../components/ScoreGauge'
 import SectorHeatmap from '../components/SectorHeatmap'
@@ -59,6 +60,7 @@ export default function Overview() {
 
   return (
     <div>
+      <DataHealthBanner />
       <GlobalFilterBar />
 
       {/* KPI row */}
