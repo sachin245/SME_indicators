@@ -11,7 +11,9 @@ module.exports = {
         // numpy needs libopenblas; system one is missing and we can't sudo-install.
         // Pi runs 32-bit armhf user space on a 64-bit kernel — use the armhf .so
         // extracted from the libopenblas0 deb to ~/.local/openblas/.
-        LD_LIBRARY_PATH: "/home/admin/.local/openblas/usr/lib/arm-linux-gnueabihf/openblas-pthread",
+        LD_LIBRARY_PATH:
+          "/home/admin/.local/openblas/usr/lib/arm-linux-gnueabihf/openblas-pthread:" +
+          "/home/admin/.local/openblas/usr/lib/arm-linux-gnueabihf",
       },
       restart_delay: 3000,
       max_restarts: 5,
