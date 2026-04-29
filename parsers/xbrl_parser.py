@@ -12,7 +12,7 @@ import requests
 from lxml import etree
 
 from config import REQUEST_TIMEOUT, BATCH_SIZE
-from storage.database import upsert_financials
+from storage.database import query, upsert_financials
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -143,9 +143,7 @@ def _xbrl_url_candidates(pdf_url: str) -> list[str]:
 
 def run():
     """Parse XBRL for all Results filings not yet in financials table."""
-    from storage.database import query
-
-    pending = query(f"""
+    pending = query("""
         SELECT rf.id, rf.company_code, rf.company_name, rf.exchange,
                rf.pdf_url, rf.filing_date, rf.subcategory
         FROM raw_filings rf
@@ -154,8 +152,8 @@ def run():
           AND rf.pdf_url IS NOT NULL
           AND rf.pdf_url != ''
           AND f.filing_id IS NULL
-        LIMIT {BATCH_SIZE}
-    """)
+        LIMIT ?
+    """, [BATCH_SIZE])
 
     print(f"[XBRL] Processing {len(pending)} result filings")
     records = []

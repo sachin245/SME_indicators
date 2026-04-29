@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, FileText, TrendingUp } from 'lucide-react'
 import {
@@ -48,6 +49,11 @@ export default function Overview() {
     queryKey: ['summary', from, to, exchange],
     queryFn: () => fetchSummary(params),
   })
+
+  const sortedLatest = useMemo(
+    () => [...latest].sort((a, b) => (b.composite_score ?? 0) - (a.composite_score ?? 0)),
+    [latest],
+  )
 
   const sc = summary?.signal_counts
   const signalItems = [
@@ -105,10 +111,10 @@ export default function Overview() {
             <TrendingUp size={15} className="text-indigo-400" />
             <h2 className="text-sm font-semibold text-slate-300">Current Composite Score</h2>
           </div>
-          {latest.length ? (
+          {sortedLatest.length ? (
             <ResponsiveContainer width="100%" height={220}>
               <BarChart
-                data={[...latest].sort((a, b) => (b.composite_score ?? 0) - (a.composite_score ?? 0))}
+                data={sortedLatest}
                 layout="vertical"
                 margin={{ top: 0, right: 12, bottom: 0, left: 60 }}
               >
@@ -120,7 +126,7 @@ export default function Overview() {
                   formatter={(v: number) => [Math.round(v), 'Score']}
                 />
                 <Bar dataKey="composite_score" radius={[0, 4, 4, 0]}>
-                  {latest.map((row) => (
+                  {sortedLatest.map((row) => (
                     <Cell key={row.sector} fill={scoreToHsl(row.composite_score)} />
                   ))}
                 </Bar>

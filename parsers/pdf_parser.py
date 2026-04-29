@@ -168,7 +168,7 @@ def parse_filing(filing_id: str, company_code: str, filing_date: str,
 
 def run():
     """Parse all unprocessed filings in raw_filings that have a pdf_url."""
-    pending = query(f"""
+    pending = query("""
         SELECT rf.id, rf.company_code, rf.company_name, rf.exchange,
                rf.filing_date, rf.pdf_url
         FROM raw_filings rf
@@ -176,8 +176,8 @@ def run():
         WHERE rf.pdf_url IS NOT NULL
           AND rf.pdf_url != ''
           AND fs.filing_id IS NULL
-        LIMIT {BATCH_SIZE}
-    """)
+        LIMIT ?
+    """, [BATCH_SIZE])
 
     print(f"[PDF] Processing {len(pending)} unprocessed filings")
     signal_records = []

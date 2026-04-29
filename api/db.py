@@ -31,14 +31,17 @@ def _coerce_params(params: list | None) -> list:
 def execute_query(sql: str, params: list | None = None) -> list[dict]:
     if not DB_PATH.exists():
         return []
+    con = None
     try:
         con = duckdb.connect(str(DB_PATH), read_only=True)
         df = con.execute(sql, _coerce_params(params)).df()
-        con.close()
         return json.loads(df.to_json(orient="records", date_format="iso"))
     except Exception as e:
         print(f"[DB] Query error: {e}\n     SQL: {sql[:200]}\n     Params: {params}")
         return []
+    finally:
+        if con:
+            con.close()
 
 
 def execute_count(sql: str, params: list | None = None) -> int:

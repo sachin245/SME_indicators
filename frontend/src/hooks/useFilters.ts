@@ -1,14 +1,11 @@
 import { useSearchParams } from 'react-router-dom'
 import { subDays, format } from 'date-fns'
 
-const today = format(new Date(), 'yyyy-MM-dd')
-const ninetyDaysAgo = format(subDays(new Date(), 90), 'yyyy-MM-dd')
-
 export function useFilters() {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const from = searchParams.get('from') ?? ninetyDaysAgo
-  const to = searchParams.get('to') ?? today
+  const from = searchParams.get('from') ?? format(subDays(new Date(), 90), 'yyyy-MM-dd')
+  const to = searchParams.get('to') ?? format(new Date(), 'yyyy-MM-dd')
   const exchange = searchParams.getAll('exchange')
 
   function setFrom(val: string) {

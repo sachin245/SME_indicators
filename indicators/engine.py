@@ -6,6 +6,7 @@ Results are aggregated by sector and stored in the `indicators` table.
 
 import hashlib
 from datetime import date, datetime
+from functools import reduce
 
 import pandas as pd
 import numpy as np
@@ -199,21 +200,16 @@ def run():
         compute_export_outlook(),
     ]
 
-    # Merge all on sector
-    merged = frames[0]
-    for df in frames[1:]:
-        if df.empty:
-            continue
-        merged = merged.merge(df, on="sector", how="outer")
-
-    if merged.empty:
+    non_empty = [df for df in frames if not df.empty]
+    if not non_empty:
         print("[Engine] No data to compute indicators from — run scrape and parse first")
         return
 
+    merged = reduce(lambda a, b: a.merge(b, on="sector", how="outer"), non_empty)
     merged["composite_score"] = compute_composite(merged)
     merged["as_of_date"] = str(date.today())
-    merged["id"] = merged.apply(
-        lambda r: _indicator_id(r["sector"], r["as_of_date"]), axis=1
+    merged["id"] = (merged["sector"] + "|" + merged["as_of_date"]).apply(
+        lambda s: hashlib.md5(s.encode()).hexdigest()
     )
     merged["computed_at"] = datetime.now()
 

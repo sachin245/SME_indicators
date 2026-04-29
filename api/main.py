@@ -1,24 +1,26 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from api.db import execute_query
 from api.routers import indicators, filings, financials, summary, pipeline
 
 app = FastAPI(title="SME Indicators API", version="1.0.0")
 
+_DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:4173",
+]
+_extra = [o.strip() for o in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "http://localhost:4173",
-        "http://98.81.94.194",
-        "http://192.168.1.37",
-        "http://192.168.1.37:6002",
-    ],
+    allow_origins=_DEFAULT_ORIGINS + _extra,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -39,7 +41,6 @@ def health():
 def data_health():
     """Freshness and coverage snapshot — used by the dashboard to warn on
     stale or unclassified data."""
-    from api.db import execute_query
     rows = execute_query("""
         SELECT
             (SELECT COUNT(*) FROM raw_filings)                                AS total_filings,

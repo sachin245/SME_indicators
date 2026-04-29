@@ -2,6 +2,7 @@ export async function apiFetch<T>(
   path: string,
   params?: Record<string, unknown>,
   method = 'GET',
+  timeoutMs = 15_000,
 ): Promise<T> {
   const url = new URL(path, window.location.origin)
   if (params && method === 'GET') {
@@ -14,7 +15,14 @@ export async function apiFetch<T>(
       }
     }
   }
-  const res = await fetch(url.toString(), { method })
-  if (!res.ok) throw new Error(`API error ${res.status}: ${url.pathname}`)
-  return res.json()
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url.toString(), { method, signal: controller.signal })
+    if (!res.ok) throw new Error(`API error ${res.status}: ${url.pathname}`)
+    return res.json()
+  } finally {
+    clearTimeout(timer)
+  }
 }

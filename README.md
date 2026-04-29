@@ -29,7 +29,7 @@ This platform:
 - **Scrapes** BSE and NSE APIs daily for new corporate filings (announcements + financial results)
 - **Parses** each filing: extracts structured financials from XBRL/XML files and business signals from PDFs via keyword scanning
 - **Computes** six sector-level leading indicators plus a composite health score on a 0–100 scale
-- **Visualises** everything on a Streamlit dashboard with heatmaps, trend lines, and a recent filings feed
+- **Visualises** everything on a React dashboard (served by FastAPI) with sector heatmaps, trend lines, company drill-downs, and a searchable filings feed
 
 The result is a daily pulse-check on SME sector health before the broader market catches up.
 
@@ -70,8 +70,9 @@ The result is a daily pulse-check on SME sector health before the broader market
           └───────┬───────┘
                   │
           ┌───────▼───────┐
-          │  Streamlit    │
-          │  Dashboard    │
+          │  FastAPI      │
+          │  (REST API +  │
+          │  React SPA)   │
           └───────────────┘
 ```
 
@@ -87,7 +88,10 @@ The result is a daily pulse-check on SME sector health before the broader market
 | XBRL Parser | `parsers/xbrl_parser.py` | Parses XBRL/XML financial disclosures (revenue, EBITDA, PAT, debt) |
 | Indicator Engine | `indicators/engine.py` | Aggregates signals and financials into 6 sector indicators + composite |
 | Database Layer | `storage/database.py` | DuckDB schema, upsert operations, generic query interface |
-| Dashboard | `dashboard/app.py` | Streamlit web UI: heatmaps, trend lines, filings feed |
+| Sector Classifier | `storage/sectors.py` | Keyword-based sector tagging; backfills sector into all tables |
+| REST API | `api/main.py` + `api/routers/` | FastAPI app serving data endpoints and the React SPA |
+| React SPA | `frontend/src/` | Interactive dashboard: heatmaps, trend lines, company drill-down |
+| Legacy Dashboard | `dashboard/app.py` | Streamlit UI (superseded by React SPA, kept for reference) |
 
 ---
 
@@ -393,76 +397,257 @@ The target architecture deploys the pipeline as a scheduled batch job on AWS, wi
 
 ### Prerequisites
 
-- Python 3.11+
-- [Playwright](https://playwright.dev/python/) browsers installed
-- Git
+| Tool | Version | Notes |
+|---|---|---|
+| Python | 3.11+ | `python --version` to check |
+| Node.js | 18+ | Required for the React frontend |
+| npm | 9+ | Comes with Node.js |
+| Git | any | |
+| Playwright browsers | — | Installed via `playwright install chromium` |
 
-### Installation
+### 1 — Clone and set up Python
 
 ```bash
 git clone https://github.com/sachin245/SME_indicators.git
 cd SME_indicators
 
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate        # macOS / Linux
+# venv\Scripts\activate         # Windows
 
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### Initialise the Database
+### 2 — Set up the React frontend
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### 3 — Initialise the database
 
 ```bash
 python -c "from storage.database import init_db; init_db()"
 ```
 
-This creates `data/sme_indicators.duckdb` with the four tables.
+Creates `data/sme_indicators.duckdb` with the four tables.
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in the values:
+Copy `.env.example` to `.env`:
 
 ```bash
-cp .env.example .env
+cp .env.example .env       # macOS / Linux
+# copy .env.example .env   # Windows
 ```
 
 | Variable | Description | Default |
 |---|---|---|
-| `DB_PATH` | Path to DuckDB file (local) | `data/sme_indicators.duckdb` |
+| `DB_PATH` | Path to DuckDB file | `data/sme_indicators.duckdb` |
 | `PDF_CACHE_DIR` | Local PDF cache directory | `data/pdfs/` |
 | `REQUEST_DELAY` | Seconds between HTTP requests | `1.5` |
-| `LOOKBACK_DAYS` | Default days to scrape | `90` |
-| `DATABASE_URL` | PostgreSQL URL (AWS deployment) | — |
-| `AWS_REGION` | AWS region for S3/Secrets | `ap-south-1` |
-| `S3_PDF_BUCKET` | S3 bucket for PDF cache (AWS) | — |
+| `EXTRA_CORS_ORIGINS` | Comma-separated extra CORS origins | _(empty)_ |
 
 ---
 
-## Running the Pipeline
+## Running Locally
 
-### Full pipeline (scrape + parse + compute)
+### Step 1 — Run the data pipeline
 
 ```bash
+# Activate your venv first
+source venv/bin/activate
+
+# Full pipeline — scrape BSE/NSE, parse PDFs/XBRL, compute indicators
 python agent.py --scrape --parse --compute --days 90
+
+# Individual stages
+python agent.py --scrape --days 30   # scrape only, last 30 days
+python agent.py --parse              # parse all unprocessed filings
+python agent.py --compute            # recompute indicators from existing data
 ```
 
-### Individual stages
+### Step 2 — Start the API server
 
 ```bash
-python agent.py --scrape --days 30      # Scrape last 30 days only
-python agent.py --parse                 # Parse all unprocessed filings
-python agent.py --compute               # Recompute indicators
+# From the repo root (venv activated)
+uvicorn api.main:app --host 0.0.0.0 --port 8002 --reload
 ```
 
-### Launch the dashboard
+The API is now available at `http://localhost:8002/api/...`
+
+### Step 3a — Frontend dev server (hot-reload, recommended for development)
 
 ```bash
-streamlit run dashboard/app.py
+cd frontend
+npm run dev
 ```
 
-Open `http://localhost:8501` in your browser.
+Open `http://localhost:5173` in your browser. The Vite dev server proxies all
+`/api` requests to `http://localhost:8002`, so the API and UI talk to each other
+automatically.
+
+### Step 3b — Serve the built SPA via FastAPI (production-like)
+
+```bash
+cd frontend
+npm run build
+cd ..
+uvicorn api.main:app --host 0.0.0.0 --port 8002
+```
+
+Open `http://localhost:8002` — FastAPI serves the compiled React SPA from
+`frontend/dist/` and the API under `/api/`.
+
+> **Trigger the pipeline from the UI**: the dashboard has a "Run Pipeline"
+> button that calls `POST /api/pipeline/run` and polls `/api/pipeline/status`.
+> This is equivalent to running `agent.py` but is driven from the browser.
+
+---
+
+## Raspberry Pi Deployment
+
+Tested on a Raspberry Pi 4 running Raspberry Pi OS (64-bit kernel, 32-bit
+armhf user space). Uses PM2 to keep the API server running and an nginx
+reverse proxy for clean port-80 access.
+
+### Prerequisites on the Pi
+
+```bash
+# Python 3.11+
+sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip
+
+# Node.js 18 (for building the frontend once)
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# PM2 (process manager)
+sudo npm install -g pm2
+
+# nginx
+sudo apt install -y nginx
+
+# libopenblas (required by numpy on armhf)
+# If you cannot sudo-install on the Pi, extract the .deb manually:
+mkdir -p ~/.local/openblas
+cd ~/.local/openblas
+apt-get download libopenblas0-pthread:armhf
+dpkg -x libopenblas0-pthread_*.deb .
+```
+
+### 1 — Deploy the code
+
+```bash
+# On the Pi (or via SSH)
+mkdir -p ~/apps
+cd ~/apps
+git clone https://github.com/sachin245/SME_indicators.git sme-indicators
+cd sme-indicators
+
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.pi.txt   # Pi-specific deps (no Playwright)
+```
+
+> The Pi build uses `requirements.pi.txt` which omits Playwright (NSE scraper
+> won't run on the Pi, but BSE scraping, parsing, and the dashboard all work).
+
+### 2 — Build the frontend (do this once, or after each update)
+
+```bash
+cd ~/apps/sme-indicators/frontend
+npm install
+npm run build
+cd ..
+```
+
+### 3 — Initialise the database
+
+```bash
+source venv/bin/activate
+python -c "from storage.database import init_db; init_db()"
+```
+
+### 4 — Start the API server with PM2
+
+The repo includes `ecosystem.config.cjs` pre-configured for the Pi:
+
+```bash
+# From ~/apps/sme-indicators
+pm2 start ecosystem.config.cjs
+pm2 save                     # persist across reboots
+pm2 startup                  # follow the printed instruction to enable autostart
+```
+
+The API runs on port **6002**. Check it with:
+
+```bash
+pm2 status
+curl http://localhost:6002/api/health
+```
+
+### 5 — Configure nginx reverse proxy
+
+```bash
+sudo nano /etc/nginx/sites-available/sme-indicators
+```
+
+Paste:
+
+```nginx
+server {
+    listen 80;
+    server_name _;          # replace with your Pi's hostname or IP if needed
+
+    location / {
+        proxy_pass         http://127.0.0.1:6002;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/sme-indicators \
+           /etc/nginx/sites-enabled/sme-indicators
+sudo rm -f /etc/nginx/sites-enabled/default   # disable default site
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The dashboard is now available at `http://<pi-ip-address>/` on your local network.
+
+### 6 — Schedule the pipeline (cron)
+
+```bash
+crontab -e
+```
+
+Add (runs the full pipeline at 6 AM every day):
+
+```
+0 6 * * * cd ~/apps/sme-indicators && source venv/bin/activate && \
+  python agent.py --scrape --parse --compute --days 7 >> logs/cron.log 2>&1
+```
+
+### Updating the Pi after a code change
+
+```bash
+cd ~/apps/sme-indicators
+git pull
+source venv/bin/activate
+pip install -r requirements.pi.txt   # if dependencies changed
+
+cd frontend && npm install && npm run build && cd ..
+
+pm2 restart sme-indicators
+```
 
 ---
 
@@ -470,23 +655,37 @@ Open `http://localhost:8501` in your browser.
 
 ```
 SME_indicators/
-├── agent.py                  # CLI entrypoint and pipeline orchestrator
-├── config.py                 # All configuration and constants
-├── requirements.txt          # Python dependencies
+├── agent.py                  # CLI orchestrator (scrape / parse / compute)
+├── config.py                 # Constants, weights, keywords
+├── requirements.txt          # Python deps (dev / server)
+├── requirements.pi.txt       # Pi-specific deps (no Playwright)
+├── ecosystem.config.cjs      # PM2 config for Raspberry Pi
 ├── .env.example              # Environment variable template
-├── .gitignore
 ├── scrapers/
-│   ├── bse_scraper.py        # BSE filing scraper
-│   └── nse_scraper.py        # NSE filing scraper (Playwright)
+│   ├── bse_scraper.py        # BSE REST API scraper
+│   └── nse_scraper.py        # NSE scraper (Playwright headless browser)
 ├── parsers/
-│   ├── pdf_parser.py         # PDF text and signal extraction
+│   ├── pdf_parser.py         # PDF text extraction + keyword signals
 │   └── xbrl_parser.py        # XBRL/XML financial data extraction
 ├── indicators/
-│   └── engine.py             # Indicator computation and normalisation
+│   └── engine.py             # Indicator computation + normalisation (0-100)
 ├── storage/
-│   └── database.py           # DuckDB schema and data access layer
+│   ├── database.py           # DuckDB schema + upsert layer
+│   └── sectors.py            # Keyword-based sector classifier
+├── api/
+│   ├── main.py               # FastAPI app, CORS, static SPA serving
+│   ├── db.py                 # Query execution + type coercion
+│   └── routers/              # /api/indicators, /filings, /financials, etc.
+├── frontend/
+│   ├── src/                  # React 18 + TypeScript SPA
+│   │   ├── pages/            # Overview, SectorDetail, CompanyBrowser, …
+│   │   ├── components/       # Heatmap, LineChart, Gauge, …
+│   │   ├── api/              # Typed fetch wrappers
+│   │   └── hooks/            # useFilters (global date/exchange state)
+│   ├── package.json
+│   └── vite.config.ts        # Dev proxy → localhost:8002
 └── dashboard/
-    └── app.py                # Streamlit dashboard
+    └── app.py                # Legacy Streamlit UI (superseded by React SPA)
 ```
 
 ---

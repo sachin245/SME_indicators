@@ -6,7 +6,7 @@ Uses BSE's unofficial public JSON API endpoints with HTML fallback.
 import hashlib
 import json
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import requests
@@ -92,7 +92,7 @@ def _scrape_ann_get_data(str_cat: str, from_date: date, to_date: date, label: st
                 "pdf_url": pdf_url,
                 "pdf_local": None,
                 "raw_json": json.dumps(item),
-                "scraped_at": None,
+                "scraped_at": datetime.now().isoformat(),
             }
             records.append(rec)
 
@@ -146,7 +146,7 @@ def _scrape_announcements_html(from_date: date, to_date: date) -> list[dict]:
                 "pdf_url": pdf_url,
                 "pdf_local": None,
                 "raw_json": "{}",
-                "scraped_at": None,
+                "scraped_at": datetime.now().isoformat(),
             }
             records.append(rec)
         print(f"[BSE] HTML fallback: {len(records)} records")
