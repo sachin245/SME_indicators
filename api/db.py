@@ -1,10 +1,8 @@
-import os
+import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sme:sme@localhost:5432/sme_indicators")
+DB_PATH = Path(__file__).parent.parent / "data" / "sme_indicators.db"
 
 
 def _serialize(v):
@@ -14,12 +12,14 @@ def _serialize(v):
 
 
 def execute_query(sql: str, params: list | None = None) -> list[dict]:
+    if not DB_PATH.exists():
+        return []
     con = None
     try:
-        con = psycopg2.connect(DATABASE_URL)
-        with con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, params or [])
-            return [{k: _serialize(v) for k, v in row.items()} for row in cur.fetchall()]
+        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        con.row_factory = sqlite3.Row
+        cur = con.execute(sql, params or [])
+        return [{k: _serialize(row[k]) for k in row.keys()} for row in cur.fetchall()]
     except Exception as e:
         print(f"[DB] Query error: {e}\n     SQL: {sql[:200]}\n     Params: {params}")
         return []

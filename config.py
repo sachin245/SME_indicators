@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent
-PDF_CACHE_DIR = BASE_DIR / "data" / "pdfs"
+DB_PATH = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "sme_indicators.db")))
+PDF_CACHE_DIR = Path(os.getenv("PDF_CACHE_DIR", str(BASE_DIR / "data" / "pdfs")))
 
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sme:sme@localhost:5432/sme_indicators")
 
 # BSE API base
 BSE_API_BASE = "https://api.bseindia.com/BseIndiaAPI/api"

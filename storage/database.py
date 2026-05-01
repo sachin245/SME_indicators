@@ -1,100 +1,98 @@
-import os
+import sqlite3
 import pandas as pd
-import psycopg2
-import psycopg2.extras
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sme:sme@localhost:5432/sme_indicators")
+from config import DB_PATH
 
 
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+def get_connection() -> sqlite3.Connection:
+    con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    return con
 
 
 def init_db():
     con = get_connection()
     try:
-        with con.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS raw_filings (
-                    id            VARCHAR PRIMARY KEY,
-                    exchange      VARCHAR NOT NULL,
-                    company_code  VARCHAR NOT NULL,
-                    company_name  VARCHAR,
-                    filing_date   DATE,
-                    category      VARCHAR,
-                    subcategory   VARCHAR,
-                    headline      VARCHAR,
-                    pdf_url       VARCHAR,
-                    pdf_local     VARCHAR,
-                    raw_json      TEXT,
-                    scraped_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS financials (
-                    id            VARCHAR PRIMARY KEY,
-                    filing_id     VARCHAR,
-                    company_code  VARCHAR NOT NULL,
-                    company_name  VARCHAR,
-                    exchange      VARCHAR,
-                    period_end    DATE,
-                    period_type   VARCHAR,
-                    revenue       DOUBLE PRECISION,
-                    ebitda        DOUBLE PRECISION,
-                    pat           DOUBLE PRECISION,
-                    total_debt    DOUBLE PRECISION,
-                    sector        VARCHAR,
-                    parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS filing_signals (
-                    id            VARCHAR PRIMARY KEY,
-                    filing_id     VARCHAR,
-                    company_code  VARCHAR,
-                    filing_date   DATE,
-                    sector        VARCHAR,
-                    order_book    BOOLEAN DEFAULT FALSE,
-                    capex         BOOLEAN DEFAULT FALSE,
-                    credit_stress BOOLEAN DEFAULT FALSE,
-                    export        BOOLEAN DEFAULT FALSE,
-                    headcount     BOOLEAN DEFAULT FALSE,
-                    raw_text      TEXT,
-                    parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS indicators (
-                    id                    VARCHAR PRIMARY KEY,
-                    sector                VARCHAR NOT NULL,
-                    as_of_date            DATE NOT NULL,
-                    revenue_momentum      DOUBLE PRECISION,
-                    margin_pressure       DOUBLE PRECISION,
-                    order_book_signal     DOUBLE PRECISION,
-                    credit_stress         DOUBLE PRECISION,
-                    capex_intentions      DOUBLE PRECISION,
-                    export_outlook        DOUBLE PRECISION,
-                    composite_score       DOUBLE PRECISION,
-                    computed_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS raw_filings (
+                id            TEXT PRIMARY KEY,
+                exchange      TEXT NOT NULL,
+                company_code  TEXT NOT NULL,
+                company_name  TEXT,
+                filing_date   TEXT,
+                category      TEXT,
+                subcategory   TEXT,
+                headline      TEXT,
+                pdf_url       TEXT,
+                pdf_local     TEXT,
+                raw_json      TEXT,
+                scraped_at    TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS financials (
+                id            TEXT PRIMARY KEY,
+                filing_id     TEXT,
+                company_code  TEXT NOT NULL,
+                company_name  TEXT,
+                exchange      TEXT,
+                period_end    TEXT,
+                period_type   TEXT,
+                revenue       REAL,
+                ebitda        REAL,
+                pat           REAL,
+                total_debt    REAL,
+                sector        TEXT,
+                parsed_at     TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS filing_signals (
+                id            TEXT PRIMARY KEY,
+                filing_id     TEXT,
+                company_code  TEXT,
+                filing_date   TEXT,
+                sector        TEXT,
+                order_book    INTEGER DEFAULT 0,
+                capex         INTEGER DEFAULT 0,
+                credit_stress INTEGER DEFAULT 0,
+                export        INTEGER DEFAULT 0,
+                headcount     INTEGER DEFAULT 0,
+                raw_text      TEXT,
+                parsed_at     TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS indicators (
+                id                TEXT PRIMARY KEY,
+                sector            TEXT NOT NULL,
+                as_of_date        TEXT NOT NULL,
+                revenue_momentum  REAL,
+                margin_pressure   REAL,
+                order_book_signal REAL,
+                credit_stress     REAL,
+                capex_intentions  REAL,
+                export_outlook    REAL,
+                composite_score   REAL,
+                computed_at       TEXT DEFAULT (datetime('now'))
+            );
+        """)
         con.commit()
     finally:
         con.close()
 
 
-def _upsert(cur, table: str, df: pd.DataFrame, pk: str = "id"):
+def _upsert(con: sqlite3.Connection, table: str, df: pd.DataFrame, pk: str = "id"):
     df = df.drop_duplicates(subset=[pk], keep="last")
     cols = list(df.columns)
     ids = df[pk].tolist()
     if ids:
-        cur.execute(f"DELETE FROM {table} WHERE {pk} = ANY(%s)", (ids,))
-    rows = [tuple(None if pd.isna(v) else v for v in row) for row in df.itertuples(index=False)]
-    psycopg2.extras.execute_values(
-        cur,
-        f"INSERT INTO {table} ({', '.join(cols)}) VALUES %s",
-        rows,
-    )
+        placeholders = ",".join("?" * len(ids))
+        con.execute(f"DELETE FROM {table} WHERE {pk} IN ({placeholders})", ids)
+    rows = [
+        tuple(None if (v is not None and pd.isna(v)) else v for v in row)
+        for row in df.itertuples(index=False)
+    ]
+    col_str = ", ".join(cols)
+    val_str = ", ".join("?" * len(cols))
+    con.executemany(f"INSERT INTO {table} ({col_str}) VALUES ({val_str})", rows)
 
 
 def _upsert_records(table: str, records: list[dict]):
@@ -103,8 +101,7 @@ def _upsert_records(table: str, records: list[dict]):
     con = get_connection()
     try:
         df = pd.DataFrame(records)
-        with con.cursor() as cur:
-            _upsert(cur, table, df)
+        _upsert(con, table, df)
         con.commit()
     finally:
         con.close()
@@ -129,10 +126,9 @@ def upsert_indicators(records: list[dict]):
 def query(sql: str, params=None) -> pd.DataFrame:
     con = get_connection()
     try:
-        with con.cursor() as cur:
-            cur.execute(sql, params or [])
-            cols = [d[0] for d in cur.description]
-            rows = cur.fetchall()
-            return pd.DataFrame(rows, columns=cols)
+        cur = con.execute(sql, params or [])
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        return pd.DataFrame([dict(r) for r in rows], columns=cols)
     finally:
         con.close()

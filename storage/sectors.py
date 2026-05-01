@@ -16,8 +16,7 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-import psycopg2
-import psycopg2.extras
+import sqlite3
 
 from storage.database import get_connection
 
@@ -117,48 +116,47 @@ def backfill_sectors() -> dict:
     NULL or 'Unknown'. Idempotent — safe to re-run."""
     con = get_connection()
     try:
-        with con.cursor() as cur:
-            cur.execute(
-                "SELECT company_code, MAX(company_name) AS company_name "
-                "FROM raw_filings WHERE company_code IS NOT NULL GROUP BY company_code"
-            )
-            rows = cur.fetchall()
+        rows = con.execute(
+            "SELECT company_code, MAX(company_name) AS company_name "
+            "FROM raw_filings WHERE company_code IS NOT NULL GROUP BY company_code"
+        ).fetchall()
 
         mapping = [(code, classify(name)) for code, name in rows]
 
-        with con.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS _sector_map")
-            cur.execute(
-                "CREATE TEMP TABLE _sector_map (company_code VARCHAR, sector VARCHAR)"
-            )
-            psycopg2.extras.execute_values(
-                cur, "INSERT INTO _sector_map VALUES %s", mapping
-            )
+        con.execute("DROP TABLE IF EXISTS _sector_map")
+        con.execute("CREATE TEMP TABLE _sector_map (company_code TEXT, sector TEXT)")
+        con.executemany("INSERT INTO _sector_map VALUES (?, ?)", mapping)
 
-            cur.execute("""
-                UPDATE filing_signals fs
-                SET sector = m.sector
-                FROM _sector_map m
-                WHERE fs.company_code = m.company_code
-                  AND (fs.sector IS NULL OR fs.sector = '' OR fs.sector = 'Unknown')
-                  AND m.sector <> 'Unknown'
-            """)
-            sig_updated = cur.rowcount
-
-            cur.execute("""
-                UPDATE financials f
-                SET sector = m.sector
-                FROM _sector_map m
-                WHERE f.company_code = m.company_code
-                  AND (f.sector IS NULL OR f.sector = '' OR f.sector = 'Unknown')
-                  AND m.sector <> 'Unknown'
-            """)
-            fin_updated = cur.rowcount
-
-            cur.execute(
-                "SELECT sector, COUNT(*) AS n FROM filing_signals GROUP BY sector ORDER BY n DESC"
+        # SQLite doesn't support UPDATE...FROM; use correlated subquery instead
+        con.execute("""
+            UPDATE filing_signals
+            SET sector = (
+                SELECT sector FROM _sector_map
+                WHERE _sector_map.company_code = filing_signals.company_code
             )
-            dist = cur.fetchall()
+            WHERE company_code IN (
+                SELECT company_code FROM _sector_map WHERE sector != 'Unknown'
+            )
+            AND (sector IS NULL OR sector = '' OR sector = 'Unknown')
+        """)
+        sig_updated = con.execute("SELECT changes()").fetchone()[0]
+
+        con.execute("""
+            UPDATE financials
+            SET sector = (
+                SELECT sector FROM _sector_map
+                WHERE _sector_map.company_code = financials.company_code
+            )
+            WHERE company_code IN (
+                SELECT company_code FROM _sector_map WHERE sector != 'Unknown'
+            )
+            AND (sector IS NULL OR sector = '' OR sector = 'Unknown')
+        """)
+        fin_updated = con.execute("SELECT changes()").fetchone()[0]
+
+        dist = con.execute(
+            "SELECT sector, COUNT(*) AS n FROM filing_signals GROUP BY sector ORDER BY n DESC"
+        ).fetchall()
 
         con.commit()
         return {
