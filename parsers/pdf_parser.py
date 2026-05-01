@@ -14,6 +14,7 @@ Both modes run in parallel across PDF_WORKERS threads.
 import hashlib
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -164,17 +165,24 @@ Example output:
 
 
 def _ai_extract(text: str) -> dict:
-    response = _openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": _AI_SYSTEM_PROMPT},
-            {"role": "user", "content": text[:4000]},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-        max_tokens=150,
-    )
-    return json.loads(response.choices[0].message.content)
+    for attempt in range(3):
+        try:
+            response = _openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": _AI_SYSTEM_PROMPT},
+                    {"role": "user", "content": text[:4000]},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=150,
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))  # 0.5s then 1.0s
+                continue
+            raise
 
 
 # ── Per-filing entry point ────────────────────────────────────────────────────

@@ -78,7 +78,7 @@ def _launch_browser_session() -> dict:
         print("[NSE] Browser session established and cookies cached")
         return cookies
     except Exception as e:
-        print(f"[NSE] Playwright session failed: {e}")
+        print(f"[NSE] Playwright session failed: {str(e).encode('ascii', 'replace').decode()}")
         return {}
 
 

@@ -30,7 +30,11 @@ def run_scrape(days: int):
 
     bse_records = bse_scraper.run(days_back=days)
     time.sleep(2)
-    nse_records = nse_scraper.run(days_back=days)
+    try:
+        nse_records = nse_scraper.run(days_back=days)
+    except Exception as e:
+        print(f"[Scrape] NSE scraper failed (BSE data still saved): {e}")
+        nse_records = []
 
     total = len(bse_records) + len(nse_records)
     print(f"\n[Scrape] Done. {total} total filings saved.")

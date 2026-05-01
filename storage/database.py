@@ -91,6 +91,23 @@ def init_db():
         con.close()
 
 
+def _coerce(v):
+    """Convert pandas/numpy types that SQLite's driver can't bind natively."""
+    if v is None:
+        return None
+    if isinstance(v, pd.Timestamp):
+        return v.isoformat()
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # numpy int/float → Python native
+    if hasattr(v, "item"):
+        return v.item()
+    return v
+
+
 def _upsert(con: sqlite3.Connection, table: str, df: pd.DataFrame, pk: str = "id"):
     df = df.drop_duplicates(subset=[pk], keep="last")
     cols = list(df.columns)
@@ -99,7 +116,7 @@ def _upsert(con: sqlite3.Connection, table: str, df: pd.DataFrame, pk: str = "id
         placeholders = ",".join("?" * len(ids))
         con.execute(f"DELETE FROM {table} WHERE {pk} IN ({placeholders})", ids)
     rows = [
-        tuple(None if (v is not None and pd.isna(v)) else v for v in row)
+        tuple(_coerce(v) for v in row)
         for row in df.itertuples(index=False)
     ]
     col_str = ", ".join(cols)
