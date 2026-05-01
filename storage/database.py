@@ -73,6 +73,18 @@ def init_db():
                 composite_score   REAL,
                 computed_at       TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS dashboard_cache (
+                key        TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_rf_filing_date  ON raw_filings(filing_date);
+            CREATE INDEX IF NOT EXISTS idx_rf_company      ON raw_filings(company_code, exchange);
+            CREATE INDEX IF NOT EXISTS idx_fs_filing_id    ON filing_signals(filing_id);
+            CREATE INDEX IF NOT EXISTS idx_fs_date_sector  ON filing_signals(filing_date, sector);
+            CREATE INDEX IF NOT EXISTS idx_ind_sector_date ON indicators(sector, as_of_date);
         """)
         con.commit()
     finally:
@@ -121,6 +133,19 @@ def upsert_signals(records: list[dict]):
 
 def upsert_indicators(records: list[dict]):
     _upsert_records("indicators", records)
+
+
+def write_dashboard_cache(key: str, value_json: str):
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM dashboard_cache WHERE key = ?", [key])
+        con.execute(
+            "INSERT INTO dashboard_cache (key, value_json) VALUES (?, ?)",
+            [key, value_json],
+        )
+        con.commit()
+    finally:
+        con.close()
 
 
 def query(sql: str, params=None) -> pd.DataFrame:

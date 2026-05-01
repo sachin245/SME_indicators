@@ -5,6 +5,7 @@ Results are aggregated by sector and stored in the `indicators` table.
 """
 
 import hashlib
+import json
 from datetime import date, datetime
 from functools import reduce
 
@@ -12,7 +13,7 @@ import pandas as pd
 import numpy as np
 
 from config import INDICATOR_WEIGHTS
-from storage.database import query, upsert_indicators
+from storage.database import query, upsert_indicators, write_dashboard_cache
 from storage.sectors import backfill_sectors
 
 
@@ -95,7 +96,7 @@ def compute_order_book_signal() -> pd.DataFrame:
                COUNT(*)                          AS total,
                SUM(CAST(order_book AS INTEGER))  AS hits
         FROM filing_signals
-        WHERE filing_date >= CURRENT_DATE - INTERVAL 90 DAY
+        WHERE filing_date >= date('now', '-90 days')
         GROUP BY sector
     """)
     if df.empty:
@@ -115,7 +116,7 @@ def compute_credit_stress() -> pd.DataFrame:
                COUNT(*)                               AS total,
                SUM(CAST(credit_stress AS INTEGER))    AS hits
         FROM filing_signals
-        WHERE filing_date >= CURRENT_DATE - INTERVAL 90 DAY
+        WHERE filing_date >= date('now', '-90 days')
         GROUP BY sector
     """)
     if df.empty:
@@ -135,7 +136,7 @@ def compute_capex_intentions() -> pd.DataFrame:
                COUNT(*)                        AS total,
                SUM(CAST(capex AS INTEGER))     AS hits
         FROM filing_signals
-        WHERE filing_date >= CURRENT_DATE - INTERVAL 90 DAY
+        WHERE filing_date >= date('now', '-90 days')
         GROUP BY sector
     """)
     if df.empty:
@@ -155,7 +156,7 @@ def compute_export_outlook() -> pd.DataFrame:
                COUNT(*)                         AS total,
                SUM(CAST(export AS INTEGER))     AS hits
         FROM filing_signals
-        WHERE filing_date >= CURRENT_DATE - INTERVAL 90 DAY
+        WHERE filing_date >= date('now', '-90 days')
         GROUP BY sector
     """)
     if df.empty:
@@ -225,6 +226,15 @@ def run():
 
     upsert_indicators(merged[cols].to_dict(orient="records"))
     print(f"[Engine] Saved indicators for {len(merged)} sectors")
+
+    # Write latest indicators to dashboard_cache so the API can skip the live query
+    cache_df = merged[cols].copy()
+    cache_df["computed_at"] = cache_df["computed_at"].astype(str)
+    write_dashboard_cache(
+        "latest_indicators",
+        cache_df.sort_values("composite_score", ascending=False).to_json(orient="records"),
+    )
+    print("[Engine] Dashboard cache updated")
 
     # Print summary table
     summary = merged[["sector", "composite_score"]].sort_values(

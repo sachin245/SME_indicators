@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,7 +9,16 @@ from fastapi.staticfiles import StaticFiles
 from api.db import execute_query
 from api.routers import indicators, filings, financials, summary, pipeline
 
-app = FastAPI(title="SME Indicators API", version="1.0.0")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Ensure schema (including new tables/indexes) is up to date on every start
+    from storage.database import init_db
+    init_db()
+    yield
+
+
+app = FastAPI(title="SME Indicators API", version="1.0.0", lifespan=_lifespan)
 
 _DEFAULT_ORIGINS = [
     "http://localhost:5173",

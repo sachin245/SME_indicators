@@ -137,9 +137,9 @@ def list_companies(
 
     data_sql = f"""
         SELECT rf.company_code,
-               ANY_VALUE(rf.company_name) AS company_name,
+               MIN(rf.company_name) AS company_name,
                rf.exchange,
-               ANY_VALUE(COALESCE(fs.sector, 'Unknown')) AS sector,
+               MIN(COALESCE(fs.sector, 'Unknown')) AS sector,
                COUNT(rf.id) AS filing_count
         FROM raw_filings rf
         LEFT JOIN filing_signals fs ON rf.id = fs.filing_id
@@ -183,9 +183,15 @@ def get_signal_trend(
 
     where = " AND ".join(conditions)
 
+    bucket_expr = (
+        "strftime('%Y-%m-01', fs.filing_date)"
+        if bucket == "month"
+        else "strftime('%Y-%W', fs.filing_date)"
+    )
+
     sql = f"""
         SELECT
-            CAST(DATE_TRUNC('{bucket}', fs.filing_date) AS VARCHAR) AS bucket,
+            {bucket_expr} AS bucket,
             COUNT(*) AS total,
             SUM(CAST(fs.order_book AS INTEGER))    AS order_book_hits,
             SUM(CAST(fs.capex AS INTEGER))         AS capex_hits,
@@ -195,7 +201,7 @@ def get_signal_trend(
         FROM filing_signals fs
         LEFT JOIN raw_filings rf ON fs.filing_id = rf.id
         WHERE {where}
-        GROUP BY DATE_TRUNC('{bucket}', fs.filing_date)
+        GROUP BY {bucket_expr}
         ORDER BY bucket
     """
 

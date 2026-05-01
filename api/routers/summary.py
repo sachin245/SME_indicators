@@ -27,13 +27,17 @@ def get_summary(
 
     rf_where = " AND ".join(rf_conditions)
 
-    total_filings = execute_count(
-        f"SELECT COUNT(*) AS total FROM raw_filings WHERE {rf_where}", rf_params
-    )
-    total_companies = execute_count(
-        f"SELECT COUNT(DISTINCT company_code) AS total FROM raw_filings WHERE {rf_where}",
+    counts_row = execute_query(
+        f"""
+        SELECT COUNT(*) AS total_filings,
+               COUNT(DISTINCT company_code) AS total_companies
+        FROM raw_filings
+        WHERE {rf_where}
+        """,
         rf_params,
     )
+    total_filings = counts_row[0].get("total_filings", 0) if counts_row else 0
+    total_companies = counts_row[0].get("total_companies", 0) if counts_row else 0
 
     # Signal counts (join for exchange filter)
     sig_conditions = ["1=1"]

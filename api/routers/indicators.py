@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 from fastapi import APIRouter
 from api.db import execute_query
@@ -14,15 +15,28 @@ def list_sectors():
 
 @router.get("/indicators/latest")
 def get_latest_indicators():
+    # Serve from dashboard_cache when available — updated at end of each pipeline run
+    cache = execute_query(
+        "SELECT value_json FROM dashboard_cache WHERE key = 'latest_indicators'"
+    )
+    if cache and cache[0].get("value_json"):
+        return json.loads(cache[0]["value_json"])
+
+    # Fall back to live query using a window function (single pass, no self-join)
     sql = """
-        SELECT i.*
-        FROM indicators i
-        INNER JOIN (
-            SELECT sector, MAX(as_of_date) AS max_date
+        SELECT id, sector, as_of_date,
+               revenue_momentum, margin_pressure, order_book_signal,
+               credit_stress, capex_intentions, export_outlook,
+               composite_score, computed_at
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sector ORDER BY as_of_date DESC
+                   ) AS rn
             FROM indicators
-            GROUP BY sector
-        ) latest ON i.sector = latest.sector AND i.as_of_date = latest.max_date
-        ORDER BY i.composite_score DESC NULLS LAST
+        )
+        WHERE rn = 1
+        ORDER BY composite_score DESC NULLS LAST
     """
     return execute_query(sql)
 

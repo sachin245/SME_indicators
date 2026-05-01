@@ -1,19 +1,25 @@
 """
 NSE scraper — targets NSE Emerge (SME platform) and SME-sized NSE-listed companies.
 NSE uses aggressive bot detection; we establish a browser session via Playwright,
-then reuse the session cookies for subsequent requests API calls.
+then reuse the session cookies for subsequent API calls.
+
+Cookie caching: cookies are persisted to NSE_COOKIE_FILE (data/nse_cookies.json)
+and reused across runs.  A new browser session is only launched when the cache is
+absent, older than 4 hours, or when NSE returns 401.
 """
 
 import hashlib
 import json
 import time
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Optional
 
 import requests
 
 from config import (
-    NSE_API_BASE, NSE_BASE, REQUEST_DELAY, REQUEST_TIMEOUT, MAX_RETRIES,
+    NSE_API_BASE, NSE_BASE, NSE_COOKIE_FILE,
+    REQUEST_DELAY, REQUEST_TIMEOUT, MAX_RETRIES,
     DEFAULT_DAYS_BACK,
 )
 from storage.database import upsert_filings
@@ -26,9 +32,35 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+_COOKIE_TTL = 4 * 3600  # seconds before we re-launch the browser
 
-def _get_session_cookies() -> dict:
-    """Use Playwright to load NSE homepage and extract session cookies."""
+
+# ── Cookie cache ─────────────────────────────────────────────────────────────
+
+def _load_cached_cookies() -> dict:
+    try:
+        if NSE_COOKIE_FILE.exists():
+            data = json.loads(NSE_COOKIE_FILE.read_text())
+            if time.time() - data.get("timestamp", 0) < _COOKIE_TTL:
+                print("[NSE] Using cached session cookies")
+                return data["cookies"]
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cookies(cookies: dict):
+    try:
+        NSE_COOKIE_FILE.write_text(
+            json.dumps({"cookies": cookies, "timestamp": time.time()})
+        )
+    except Exception as e:
+        print(f"[NSE] Could not save cookie cache: {e}")
+
+
+def _launch_browser_session() -> dict:
+    """Launch headless Chrome via Playwright to get fresh NSE session cookies."""
+    print("[NSE] Launching browser to establish session cookies...")
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -39,52 +71,64 @@ def _get_session_cookies() -> dict:
             )
             page = context.new_page()
             page.goto(NSE_BASE, timeout=60000)
-            page.wait_for_timeout(3000)  # let JS load
+            page.wait_for_timeout(3000)
             cookies = {c["name"]: c["value"] for c in context.cookies()}
             browser.close()
-            return cookies
+        _save_cookies(cookies)
+        print("[NSE] Browser session established and cookies cached")
+        return cookies
     except Exception as e:
         print(f"[NSE] Playwright session failed: {e}")
         return {}
 
 
+def _get_session_cookies(force_refresh: bool = False) -> dict:
+    if not force_refresh:
+        cached = _load_cached_cookies()
+        if cached:
+            return cached
+    return _launch_browser_session()
+
+
+# ── HTTP helper ───────────────────────────────────────────────────────────────
+
 def _get(url: str, params: dict = None, cookies: dict = None) -> Optional[dict | list]:
+    _cookies = cookies if cookies is not None else _get_session_cookies()
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.get(
                 url, params=params, headers=HEADERS,
-                cookies=cookies or {}, timeout=REQUEST_TIMEOUT,
+                cookies=_cookies, timeout=REQUEST_TIMEOUT,
             )
             if resp.status_code == 200:
                 return resp.json()
-            if resp.status_code in (429, 503):
-                time.sleep(REQUEST_DELAY * (attempt + 2))
-            elif resp.status_code == 401:
+            if resp.status_code == 401:
                 print("[NSE] Session expired — refreshing cookies")
-                cookies = _get_session_cookies()
+                _cookies = _get_session_cookies(force_refresh=True)
+            elif resp.status_code in (429, 503):
+                time.sleep(REQUEST_DELAY * (attempt + 2))
         except Exception as e:
             print(f"[NSE] Request error ({attempt+1}/{MAX_RETRIES}): {e}")
             time.sleep(REQUEST_DELAY)
     return None
 
 
-def _filing_id(exchange: str, company_code: str, filing_date: str, headline: str) -> str:
-    raw = f"{exchange}|{company_code}|{filing_date}|{headline}"
-    return hashlib.md5(raw.encode()).hexdigest()
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _filing_id(exchange: str, company_code: str, filing_date: str, headline: str) -> str:
+    return hashlib.md5(f"{exchange}|{company_code}|{filing_date}|{headline}".encode()).hexdigest()
+
+
+# ── Scrapers ──────────────────────────────────────────────────────────────────
 
 def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
-    """Fetch corporate announcements from NSE."""
     to_date = date.today()
     from_date = to_date - timedelta(days=days_back)
 
     print(f"[NSE] Scraping announcements from {from_date} to {to_date}")
-    print("[NSE] Establishing browser session for cookies...")
     cookies = _get_session_cookies()
-    time.sleep(REQUEST_DELAY)
 
     records = []
-    # NSE paginates — iterate pages until data exhausted
     page_num = 1
     while True:
         params = {
@@ -114,7 +158,7 @@ def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
             if attach:
                 pdf_url = f"{NSE_BASE}/corporate-announcements/attachment/{attach}"
 
-            rec = {
+            records.append({
                 "id": _filing_id("NSE", company_code, filing_date_raw, headline),
                 "exchange": "NSE",
                 "company_code": company_code,
@@ -127,12 +171,11 @@ def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
                 "pdf_local": None,
                 "raw_json": json.dumps(item),
                 "scraped_at": None,
-            }
-            records.append(rec)
+            })
 
         time.sleep(REQUEST_DELAY)
         page_num += 1
-        if len(items) < 20:  # last page
+        if len(items) < 20:
             break
 
     print(f"[NSE] Fetched {len(records)} announcement records")
@@ -140,13 +183,11 @@ def scrape_announcements(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
 
 
 def scrape_financial_results(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
-    """Fetch financial result filings from NSE."""
     to_date = date.today()
     from_date = to_date - timedelta(days=days_back)
 
     print(f"[NSE] Scraping financial results from {from_date} to {to_date}")
     cookies = _get_session_cookies()
-    time.sleep(REQUEST_DELAY)
 
     params = {
         "index": "equities",
@@ -157,9 +198,7 @@ def scrape_financial_results(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
     data = _get(f"{NSE_API_BASE}/corp-announcements", params=params, cookies=cookies)
 
     records = []
-    items = []
-    if data:
-        items = data if isinstance(data, list) else data.get("data", [])
+    items = (data if isinstance(data, list) else data.get("data", [])) if data else []
 
     for item in items:
         company_code = str(item.get("symbol", "")).strip()
@@ -172,7 +211,7 @@ def scrape_financial_results(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
         if attach:
             pdf_url = f"{NSE_BASE}/corporate-announcements/attachment/{attach}"
 
-        rec = {
+        records.append({
             "id": _filing_id("NSE", company_code, filing_date_raw, headline),
             "exchange": "NSE",
             "company_code": company_code,
@@ -185,16 +224,13 @@ def scrape_financial_results(days_back: int = DEFAULT_DAYS_BACK) -> list[dict]:
             "pdf_local": None,
             "raw_json": json.dumps(item),
             "scraped_at": None,
-        }
-        records.append(rec)
-        time.sleep(0.05)
+        })
 
     print(f"[NSE] Fetched {len(records)} financial result records")
     return records
 
 
 def run(days_back: int = DEFAULT_DAYS_BACK):
-    """Main entry point — scrape and persist NSE filings."""
     records = []
     records += scrape_announcements(days_back)
     time.sleep(REQUEST_DELAY)

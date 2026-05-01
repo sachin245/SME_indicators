@@ -7,6 +7,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 DB_PATH = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "sme_indicators.db")))
 PDF_CACHE_DIR = Path(os.getenv("PDF_CACHE_DIR", str(BASE_DIR / "data" / "pdfs")))
+NSE_COOKIE_FILE = BASE_DIR / "data" / "nse_cookies.json"
 
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,8 +28,17 @@ MAX_RETRIES = 3
 # Default lookback window for scraping (days)
 DEFAULT_DAYS_BACK = 90
 
-# Max filings processed per parser run
-BATCH_SIZE = 200
+# Max filings processed per parser run (per batch)
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "500"))
+
+# OpenAI — used for fast structured extraction from filing text
+OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY") or None
+
+# Parallel workers for PDF download + extraction
+PDF_WORKERS = int(os.getenv("PDF_WORKERS", "10"))
+
+# Set to false to force regex/pdfplumber extraction even when OpenAI is configured
+USE_AI_PARSER = os.getenv("USE_AI_PARSER", "true").lower() == "true"
 
 # BSE SME segment code
 BSE_SME_SEGMENT = "BE"   # BSE SME Emerge segment marker
