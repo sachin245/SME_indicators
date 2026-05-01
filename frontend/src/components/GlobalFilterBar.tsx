@@ -1,38 +1,9 @@
-import { useEffect, useRef } from 'react'
-import { useQueryClient, useQuery } from '@tanstack/react-query'
-import { RefreshCw, AlertCircle, CheckCircle } from 'lucide-react'
+import { useData } from '../context/DataContext'
 import { useFilters } from '../hooks/useFilters'
-import { apiFetch } from '../api/client'
-
-type PipelineStatus = { status: 'idle' | 'running' | 'error'; message: string }
 
 export default function GlobalFilterBar() {
   const { from, to, exchange, setFrom, setTo, toggleExchange } = useFilters()
-  const queryClient = useQueryClient()
-  const wasRunning = useRef(false)
-
-  const { data: pipeline, refetch: pollStatus } = useQuery<PipelineStatus>({
-    queryKey: ['pipeline', 'status'],
-    queryFn: () => apiFetch('/api/pipeline/status'),
-    refetchInterval: (query) =>
-      query.state.data?.status === 'running' ? 2000 : false,
-    staleTime: Infinity,
-  })
-
-  useEffect(() => {
-    if (wasRunning.current && pipeline?.status !== 'running') {
-      queryClient.invalidateQueries()
-    }
-    wasRunning.current = pipeline?.status === 'running'
-  }, [pipeline?.status, queryClient])
-
-  async function handleFetch() {
-    await apiFetch('/api/pipeline/run', undefined, 'POST')
-    pollStatus()
-  }
-
-  const isRunning = pipeline?.status === 'running'
-  const isError = pipeline?.status === 'error'
+  const { generatedAt } = useData()
 
   return (
     <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-slate-800 border border-slate-700 rounded-xl">
@@ -70,26 +41,9 @@ export default function GlobalFilterBar() {
           </button>
         ))}
       </div>
-
-      <div className="ml-auto flex items-center gap-2">
-        {pipeline?.message && (
-          <span className="flex items-center gap-1 text-xs text-slate-400">
-            {isError && <AlertCircle size={12} className="text-red-400" />}
-            {!isRunning && !isError && pipeline.message.startsWith('Done') && (
-              <CheckCircle size={12} className="text-emerald-400" />
-            )}
-            {pipeline.message}
-          </span>
-        )}
-        <button
-          onClick={handleFetch}
-          disabled={isRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-indigo-500 bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          <RefreshCw size={13} className={isRunning ? 'animate-spin' : ''} />
-          {isRunning ? 'Running…' : 'Fetch Data'}
-        </button>
-      </div>
+      {generatedAt && (
+        <span className="ml-auto text-xs text-slate-500">Data updated {generatedAt}</span>
+      )}
     </div>
   )
 }

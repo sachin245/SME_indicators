@@ -1,51 +1,43 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react'
 import GlobalFilterBar from '../components/GlobalFilterBar'
 import FinancialsBarChart from '../components/FinancialsBarChart'
 import { SignalBadgeRow } from '../components/SignalBadge'
 import { useFilters } from '../hooks/useFilters'
-import { fetchFilings } from '../api/filings'
-import { fetchFinancials } from '../api/financials'
+import { useData } from '../context/DataContext'
+
+const PAGE_SIZE = 25
 
 export default function CompanyDetail() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
   const { from, to } = useFilters()
+  const { filings, financials } = useData()
   const [page, setPage] = useState(0)
   const [periodType, setPeriodType] = useState<'Q' | 'A' | ''>('')
-  const PAGE_SIZE = 25
 
-  const { data: financials = [] } = useQuery({
-    queryKey: ['financials', code, periodType],
-    queryFn: () => fetchFinancials({
-      company_code: code,
-      period_type: periodType || undefined,
-      limit: 40,
-    }),
-    enabled: !!code,
-  })
+  const companyFinancials = useMemo(
+    () => financials
+      .filter((f) => f.company_code === code && (!periodType || f.period_type === periodType))
+      .sort((a, b) => a.period_end.localeCompare(b.period_end)),
+    [financials, code, periodType],
+  )
 
-  const { data: filingsRes, isLoading } = useQuery({
-    queryKey: ['filings', 'company', code, from, to, page],
-    queryFn: () => fetchFilings({
-      company_code: code,
-      from_date: from,
-      to_date: to,
-      page,
-      page_size: PAGE_SIZE,
-    }),
-    enabled: !!code,
-  })
+  const companyFilings = useMemo(
+    () => filings.filter(
+      (f) => f.company_code === code && f.filing_date >= from && f.filing_date <= to,
+    ),
+    [filings, code, from, to],
+  )
 
-  const filings = filingsRes?.data ?? []
-  const total = filingsRes?.total ?? 0
+  const total = companyFilings.length
   const totalPages = Math.ceil(total / PAGE_SIZE)
+  const paginated = companyFilings.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
-  const company = filings[0] ?? financials[0]
-  const companyName = (company as { company_name?: string | null })?.company_name ?? code
-  const exchange = (company as { exchange?: string })?.exchange ?? ''
+  const first = companyFilings[0] ?? companyFinancials[0]
+  const companyName = (first as { company_name?: string | null })?.company_name ?? code
+  const exchange = (first as { exchange?: string })?.exchange ?? ''
 
   return (
     <div>
@@ -60,7 +52,6 @@ export default function CompanyDetail() {
         </div>
       </div>
 
-      {/* Financial chart */}
       <div className="mb-4">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-sm text-slate-400">Period type:</span>
@@ -78,13 +69,9 @@ export default function CompanyDetail() {
             </button>
           ))}
         </div>
-        <FinancialsBarChart
-          data={[...financials].sort((a, b) => a.period_end.localeCompare(b.period_end))}
-          title="Financial History"
-        />
+        <FinancialsBarChart data={companyFinancials} title="Financial History" />
       </div>
 
-      {/* Filings */}
       <div className="card">
         <h2 className="text-sm font-semibold text-slate-300 mb-3">
           Filings ({total.toLocaleString()})
@@ -101,45 +88,31 @@ export default function CompanyDetail() {
               </tr>
             </thead>
             <tbody>
-              {isLoading && (
-                <tr><td colSpan={5} className="text-center py-8 text-slate-400">Loading…</td></tr>
-              )}
-              {!isLoading && filings.length === 0 && (
+              {paginated.length === 0 && (
                 <tr><td colSpan={5} className="text-center py-8 text-slate-400">No filings found.</td></tr>
               )}
-              {filings.map((f) => (
+              {paginated.map((f) => (
                 <tr key={f.id} className="border-b border-slate-700/50 table-row-hover">
                   <td className="px-3 py-2 text-slate-400 whitespace-nowrap text-xs">{f.filing_date}</td>
                   <td className="px-3 py-2">
-                    {f.category && (
-                      <span className="badge bg-slate-600 text-slate-300">{f.category}</span>
-                    )}
+                    {f.category && <span className="badge bg-slate-600 text-slate-300">{f.category}</span>}
                   </td>
                   <td className="px-3 py-2 text-slate-300 max-w-xs">
                     <p className="truncate">{f.headline ?? '—'}</p>
-                    {f.subcategory && (
-                      <p className="text-xs text-slate-500 truncate">{f.subcategory}</p>
-                    )}
+                    {f.subcategory && <p className="text-xs text-slate-500 truncate">{f.subcategory}</p>}
                   </td>
                   <td className="px-3 py-2">
                     <SignalBadgeRow
-                      order_book={f.order_book}
-                      capex={f.capex}
-                      credit_stress={f.credit_stress}
-                      export={f.export}
-                      headcount={f.headcount}
-                      compact
+                      order_book={f.order_book} capex={f.capex}
+                      credit_stress={f.credit_stress} export={f.export}
+                      headcount={f.headcount} compact
                     />
                   </td>
                   <td className="px-3 py-2">
                     {f.pdf_url && (
-                      <a
-                        href={f.pdf_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <a href={f.pdf_url} target="_blank" rel="noopener noreferrer"
                         className="text-indigo-400 hover:text-indigo-300"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                        onClick={(e) => e.stopPropagation()}>
                         <ExternalLink size={14} />
                       </a>
                     )}

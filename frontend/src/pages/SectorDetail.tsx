@@ -1,5 +1,5 @@
+import { useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,9 +8,7 @@ import GlobalFilterBar from '../components/GlobalFilterBar'
 import FinancialsBarChart from '../components/FinancialsBarChart'
 import ScoreGauge from '../components/ScoreGauge'
 import { useFilters } from '../hooks/useFilters'
-import { fetchIndicatorHistory, fetchLatestIndicators } from '../api/indicators'
-import { fetchCompanies, fetchSignalTrend } from '../api/filings'
-import { fetchFinancials } from '../api/financials'
+import { useData } from '../context/DataContext'
 import { INDICATOR_LABELS, SIGNAL_COLORS } from '../utils/colors'
 
 const INDICATOR_KEYS = [
@@ -18,54 +16,55 @@ const INDICATOR_KEYS = [
   'credit_stress', 'capex_intentions', 'export_outlook',
 ] as const
 
+const SIGNAL_KEYS = ['order_book_rate', 'capex_rate', 'credit_stress_rate', 'export_rate', 'headcount_rate']
+const SIGNAL_LABELS: Record<string, string> = {
+  order_book_rate: 'Order Book', capex_rate: 'Capex',
+  credit_stress_rate: 'Credit Stress', export_rate: 'Export', headcount_rate: 'Headcount',
+}
+
 export default function SectorDetail() {
   const { sector } = useParams<{ sector: string }>()
   const navigate = useNavigate()
   const { from, to, exchange } = useFilters()
   const decoded = decodeURIComponent(sector ?? '')
 
-  const { data: history = [] } = useQuery({
-    queryKey: ['indicators', 'history', decoded, from, to],
-    queryFn: () => fetchIndicatorHistory({ sector: decoded, from_date: from, to_date: to }),
-  })
+  const { indicatorsLatest, indicatorHistory, companies, financials, signalTrend } = useData()
 
-  const { data: latest = [] } = useQuery({
-    queryKey: ['indicators', 'latest'],
-    queryFn: fetchLatestIndicators,
-  })
+  const latestRow = useMemo(
+    () => indicatorsLatest.find((r) => r.sector === decoded),
+    [indicatorsLatest, decoded],
+  )
 
-  const latestRow = latest.find((r) => r.sector === decoded)
+  const history = useMemo(
+    () => indicatorHistory.filter(
+      (r) => r.sector === decoded && r.as_of_date >= from && r.as_of_date <= to,
+    ),
+    [indicatorHistory, decoded, from, to],
+  )
 
-  const { data: companiesRes } = useQuery({
-    queryKey: ['companies', decoded, exchange],
-    queryFn: () => fetchCompanies({ sector: decoded, exchange: exchange.length ? exchange : undefined, page_size: 100 }),
-  })
+  const sectorCompanies = useMemo(
+    () => companies.filter(
+      (c) => c.sector === decoded && (exchange.length === 0 || exchange.includes(c.exchange)),
+    ),
+    [companies, decoded, exchange],
+  )
 
-  const { data: financials = [] } = useQuery({
-    queryKey: ['financials', 'sector', decoded, from, to],
-    queryFn: () => fetchFinancials({
-      sector: decoded, from_date: from, to_date: to, limit: 500,
-    }),
-  })
+  const sectorFinancials = useMemo(
+    () => financials.filter(
+      (f) => f.sector === decoded && f.period_end >= from && f.period_end <= to,
+    ),
+    [financials, decoded, from, to],
+  )
 
-  const { data: signalTrend = [] } = useQuery({
-    queryKey: ['signals', 'trend', decoded, from, to],
-    queryFn: () => fetchSignalTrend({ sector: decoded, from_date: from, to_date: to }),
-  })
+  const sectorSignalTrend = useMemo(
+    () => signalTrend.filter((r) => r.bucket >= from && r.bucket <= to),
+    [signalTrend, from, to],
+  )
 
-  // Pivot indicator history into [{date, revenue_momentum: N, ...}]
   const indicatorTrendData = history.map((r) => ({
     date: r.as_of_date,
     ...INDICATOR_KEYS.reduce((acc, k) => ({ ...acc, [k]: r[k] }), {}),
   }))
-
-  const signalKeys = ['order_book_rate', 'capex_rate', 'credit_stress_rate', 'export_rate', 'headcount_rate']
-  const signalLabels: Record<string, string> = {
-    order_book_rate: 'Order Book', capex_rate: 'Capex',
-    credit_stress_rate: 'Credit Stress', export_rate: 'Export', headcount_rate: 'Headcount',
-  }
-
-  const companies = companiesRes?.data ?? []
 
   return (
     <div>
@@ -82,7 +81,6 @@ export default function SectorDetail() {
         )}
       </div>
 
-      {/* Gauge row */}
       {latestRow && (
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
           <div className="card col-span-1 flex justify-center items-center">
@@ -99,7 +97,6 @@ export default function SectorDetail() {
         </div>
       )}
 
-      {/* Indicator trend */}
       <div className="card mb-4">
         <h2 className="text-sm font-semibold text-slate-300 mb-3">Indicator Trends</h2>
         <ResponsiveContainer width="100%" height={220}>
@@ -118,35 +115,32 @@ export default function SectorDetail() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        {/* Signal trend */}
         <div className="card">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Signal Hit Rates (%)</h2>
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={signalTrend} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
+            <LineChart data={sectorSignalTrend} margin={{ top: 4, right: 12, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis dataKey="bucket" tick={{ fill: '#94a3b8', fontSize: 10 }} tickLine={false} />
               <YAxis domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} />
               <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              {signalKeys.map((k) => (
-                <Line key={k} type="monotone" dataKey={k} name={signalLabels[k]}
+              {SIGNAL_KEYS.map((k) => (
+                <Line key={k} type="monotone" dataKey={k} name={SIGNAL_LABELS[k]}
                   stroke={SIGNAL_COLORS[k]} dot={false} strokeWidth={2} connectNulls />
               ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Financials aggregate */}
-        <FinancialsBarChart data={financials} title="Sector Financials Aggregate" />
+        <FinancialsBarChart data={sectorFinancials} title="Sector Financials Aggregate" />
       </div>
 
-      {/* Companies */}
       <div className="card">
         <h2 className="text-sm font-semibold text-slate-300 mb-3">
-          Companies in {decoded} ({companies.length})
+          Companies in {decoded} ({sectorCompanies.length})
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-          {companies.map((c) => (
+          {sectorCompanies.map((c) => (
             <button
               key={`${c.company_code}-${c.exchange}`}
               onClick={() => navigate(`/companies/${c.company_code}`)}
@@ -157,7 +151,7 @@ export default function SectorDetail() {
               <p className="text-xs text-slate-500 mt-0.5">{c.filing_count} filings</p>
             </button>
           ))}
-          {companies.length === 0 && (
+          {sectorCompanies.length === 0 && (
             <p className="col-span-full text-slate-400 text-sm">No companies found.</p>
           )}
         </div>

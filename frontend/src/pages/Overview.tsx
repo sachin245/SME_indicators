@@ -1,17 +1,14 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Building2, FileText, TrendingUp } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
-import DataHealthBanner from '../components/DataHealthBanner'
 import GlobalFilterBar from '../components/GlobalFilterBar'
 import ScoreGauge from '../components/ScoreGauge'
 import SectorHeatmap from '../components/SectorHeatmap'
 import IndicatorLineChart from '../components/IndicatorLineChart'
 import { useFilters } from '../hooks/useFilters'
-import { fetchLatestIndicators, fetchIndicatorHistory } from '../api/indicators'
-import { fetchSummary } from '../api/summary'
+import { useData } from '../context/DataContext'
 import { scoreToHsl } from '../utils/colors'
 
 function KpiCard({ label, value, icon: Icon, sub }: {
@@ -32,27 +29,17 @@ function KpiCard({ label, value, icon: Icon, sub }: {
 }
 
 export default function Overview() {
-  const { from, to, exchange } = useFilters()
-  const params = { from_date: from, to_date: to, exchange: exchange.length ? exchange : undefined }
-
-  const { data: latest = [] } = useQuery({
-    queryKey: ['indicators', 'latest'],
-    queryFn: fetchLatestIndicators,
-  })
-
-  const { data: history = [] } = useQuery({
-    queryKey: ['indicators', 'history', from, to],
-    queryFn: () => fetchIndicatorHistory({ from_date: from, to_date: to }),
-  })
-
-  const { data: summary } = useQuery({
-    queryKey: ['summary', from, to, exchange],
-    queryFn: () => fetchSummary(params),
-  })
+  const { from, to } = useFilters()
+  const { indicatorsLatest, indicatorHistory, summary } = useData()
 
   const sortedLatest = useMemo(
-    () => [...latest].sort((a, b) => (b.composite_score ?? 0) - (a.composite_score ?? 0)),
-    [latest],
+    () => [...indicatorsLatest].sort((a, b) => (b.composite_score ?? 0) - (a.composite_score ?? 0)),
+    [indicatorsLatest],
+  )
+
+  const history = useMemo(
+    () => indicatorHistory.filter((r) => r.as_of_date >= from && r.as_of_date <= to),
+    [indicatorHistory, from, to],
   )
 
   const sc = summary?.signal_counts
@@ -66,10 +53,8 @@ export default function Overview() {
 
   return (
     <div>
-      <DataHealthBanner />
       <GlobalFilterBar />
 
-      {/* KPI row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="card flex flex-col items-center justify-center py-4">
           <ScoreGauge score={summary?.composite_score ?? null} size={120} />
@@ -78,7 +63,7 @@ export default function Overview() {
           label="Total Filings"
           value={(summary?.total_filings ?? 0).toLocaleString()}
           icon={FileText}
-          sub="in selected period"
+          sub="in dataset"
         />
         <KpiCard
           label="Companies Tracked"
@@ -98,14 +83,11 @@ export default function Overview() {
         </div>
       </div>
 
-      {/* Heatmap */}
       <div className="mb-6">
-        <SectorHeatmap rows={latest} />
+        <SectorHeatmap rows={indicatorsLatest} />
       </div>
 
-      {/* Bottom row: bar chart + trend */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Composite score bars */}
         <div className="card">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={15} className="text-indigo-400" />
@@ -134,12 +116,11 @@ export default function Overview() {
             </ResponsiveContainer>
           ) : (
             <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
-              No data yet — run the pipeline first.
+              No data — export from Streamlit first.
             </div>
           )}
         </div>
 
-        {/* Trend lines */}
         <IndicatorLineChart rows={history} title="Composite Score Over Time" />
       </div>
     </div>
