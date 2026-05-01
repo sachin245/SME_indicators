@@ -1,13 +1,19 @@
 name: Deploy to EC2
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
     name: SSH deploy to EC2
     runs-on: ubuntu-latest
+    # Only deploy if the upstream CI run actually passed (workflow_dispatch
+    # bypasses this check because conclusion is empty).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout code

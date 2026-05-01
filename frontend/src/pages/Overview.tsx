@@ -55,6 +55,11 @@ export default function Overview() {
     <div>
       <GlobalFilterBar />
 
+      <div className="card mb-4 text-xs text-slate-400 border-l-2 border-indigo-500/60">
+        Read-only viewer. Data refreshes are triggered from the Streamlit admin
+        console (<code className="text-slate-300">streamlit run dashboard/app.py</code>).
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="card flex flex-col items-center justify-center py-4">
           <ScoreGauge score={summary?.composite_score ?? null} size={120} />

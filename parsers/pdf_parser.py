@@ -23,10 +23,17 @@ import fitz  # PyMuPDF
 import pdfplumber
 import requests
 
+import config
 from config import (
     PDF_CACHE_DIR, REQUEST_TIMEOUT, KEYWORDS, BATCH_SIZE,
-    OPENAI_API_KEY, PDF_WORKERS, USE_AI_PARSER,
+    OPENAI_API_KEY, PDF_WORKERS,
 )
+
+
+def _use_ai() -> bool:
+    """Read USE_AI_PARSER live so a runtime toggle (e.g. Streamlit admin)
+    is honoured without re-importing the module."""
+    return bool(getattr(config, "USE_AI_PARSER", True)) and _openai_client is not None
 from storage.database import query, upsert_signals, upsert_financials
 
 HEADERS = {
@@ -205,7 +212,7 @@ def parse_filing(
     signals: dict | None = None
     fin: dict | None = None
 
-    if USE_AI_PARSER and _openai_client:
+    if _use_ai():
         try:
             extracted = _ai_extract(text)
             signals = {
@@ -264,7 +271,7 @@ def run():
     """, [BATCH_SIZE])
 
     total = len(pending)
-    mode = "AI (gpt-4o-mini)" if (USE_AI_PARSER and _openai_client) else "regex/pdfplumber"
+    mode = "AI (gpt-4o-mini)" if _use_ai() else "regex/pdfplumber"
     print(f"[PDF] {total} unprocessed filings — {PDF_WORKERS} workers — {mode} extraction")
 
     if total == 0:

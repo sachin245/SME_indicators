@@ -572,9 +572,51 @@ uvicorn api.main:app --host 0.0.0.0 --port 8002
 Open `http://localhost:8002` — FastAPI serves the compiled React SPA from
 `frontend/dist/` and the API under `/api/`.
 
-> **Trigger the pipeline from the UI**: the dashboard has a "Run Pipeline"
-> button that calls `POST /api/pipeline/run` and polls `/api/pipeline/status`.
-> This is equivalent to running `agent.py` but is driven from the browser.
+> **Role split:** the React SPA at `http://localhost:8002/` is **read-only**
+> — it visualises the data but never mutates it. To pull or refresh data, run
+> the **Streamlit admin console** (`streamlit run dashboard/app.py`). See the
+> [Streamlit Admin](#streamlit-admin) section below.
+
+---
+
+## Streamlit Admin
+
+The Streamlit app at `dashboard/app.py` is the operator-facing console. Use it
+to trigger scrapes, parse PDFs/XBRL, recompute indicators, and inspect data
+freshness. Charts and end-user views live in the React SPA — Streamlit is
+deliberately scoped to data ops.
+
+### Run locally (in-process pipeline)
+
+```bash
+source venv/bin/activate
+streamlit run dashboard/app.py
+```
+
+Opens at `http://localhost:8501`. In **local mode** the admin app calls
+`agent.py` functions directly in a background thread, so it shares the same
+DuckDB file as your local API server.
+
+What you get:
+
+- Per-stage buttons: **Scrape**, **Parse**, **Compute**, **Full pipeline**
+- Configurable scrape lookback (7–365 days)
+- **Parser toggle: OpenAI (`gpt-4o-mini`) ↔ regex/pdfplumber** — flip per run from the sidebar; falls back to regex automatically if `OPENAI_API_KEY` is unset
+- Live status panel with auto-refresh every 5s while the pipeline runs
+- Freshness panel: total filings, parse coverage %, latest filing, last scrape, last compute
+- Tabbed previews of `indicators`, `raw_filings`, `financials` for QA
+
+### Run against a remote API (e.g. EC2)
+
+```bash
+SME_ADMIN_API_URL=http://98.81.94.194 streamlit run dashboard/app.py
+```
+
+In **remote mode** the admin app calls `POST /api/pipeline/run` and polls
+`/api/pipeline/status` on the configured server, so a single operator can
+trigger refreshes on the deployed instance from their laptop. Per-stage
+buttons are disabled in remote mode (the API only exposes the full
+pipeline) — use the CLI on the server for stage-level control.
 
 ---
 
