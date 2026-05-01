@@ -13,10 +13,11 @@ A real-time intelligence platform that tracks leading indicators for Indian SME-
 5. [Database Schema](#database-schema)
 6. [Current Status](#current-status)
 7. [Roadmap & Open Tasks](#roadmap--open-tasks)
-8. [AWS Deployment Plan](#aws-deployment-plan)
-9. [Local Setup](#local-setup)
-10. [Environment Variables](#environment-variables)
-11. [Running the Pipeline](#running-the-pipeline)
+8. [EC2 Deployment](#ec2-deployment)
+9. [AWS Deployment Plan](#aws-deployment-plan)
+10. [Local Setup](#local-setup)
+11. [Environment Variables](#environment-variables)
+12. [Running the Pipeline](#running-the-pipeline)
 
 ---
 
@@ -287,6 +288,69 @@ Sector-level aggregated indicator scores.
 
 ---
 
+## EC2 Deployment
+
+The app currently runs on an AWS EC2 instance managed via systemd + nginx.
+
+### Connection details
+
+| | |
+|---|---|
+| **IP address** | `98.81.94.194` |
+| **SSH key** | `C:\Users\ResolveWave\Documents\GitHub\ec2-access.pem` |
+| **SSH user** | `ubuntu` |
+| **App directory** | `~/SME_indicators` |
+| **Service** | `sme-api` (systemd) |
+| **Internal port** | `8000` (uvicorn, nginx proxies port 80/443) |
+| **Public URL** | `http://98.81.94.194` |
+
+### Connect via SSH
+
+```bash
+ssh -i "C:\Users\ResolveWave\Documents\GitHub\ec2-access.pem" ubuntu@98.81.94.194
+```
+
+On macOS/Linux, set key permissions first:
+```bash
+chmod 400 ec2-access.pem
+```
+
+### Redeploy after a code change
+
+```bash
+ssh -i "C:\Users\ResolveWave\Documents\GitHub\ec2-access.pem" ubuntu@98.81.94.194 "
+  cd ~/SME_indicators &&
+  git pull origin main &&
+  source venv/bin/activate &&
+  pip install -r requirements.txt -q &&
+  sudo systemctl restart sme-api
+"
+```
+
+### Service management
+
+```bash
+# Check status
+sudo systemctl status sme-api
+
+# View live logs
+sudo journalctl -u sme-api -f
+
+# Restart
+sudo systemctl restart sme-api
+```
+
+### Set the OpenAI key on EC2
+
+```bash
+ssh -i "C:\Users\ResolveWave\Documents\GitHub\ec2-access.pem" ubuntu@98.81.94.194
+nano ~/SME_indicators/.env
+# Add: OPENAI_API_KEY=sk-...your-key...
+sudo systemctl restart sme-api
+```
+
+---
+
 ## AWS Deployment Plan
 
 The target architecture deploys the pipeline as a scheduled batch job on AWS, with a managed database and a publicly accessible dashboard.
@@ -448,9 +512,13 @@ cp .env.example .env       # macOS / Linux
 
 | Variable | Description | Default |
 |---|---|---|
-| `DB_PATH` | Path to DuckDB file | `data/sme_indicators.duckdb` |
+| `DB_PATH` | Path to SQLite database file | `data/sme_indicators.db` |
 | `PDF_CACHE_DIR` | Local PDF cache directory | `data/pdfs/` |
 | `REQUEST_DELAY` | Seconds between HTTP requests | `1.5` |
+| `OPENAI_API_KEY` | OpenAI key — enables GPT-4o-mini extraction (signals + financials in one call) | _(unset — falls back to regex)_ |
+| `PDF_WORKERS` | Parallel threads for PDF download + extraction | `10` |
+| `USE_AI_PARSER` | Set to `false` to force regex/pdfplumber even when key is present | `true` |
+| `BATCH_SIZE` | Max filings processed per parser run | `500` |
 | `EXTRA_CORS_ORIGINS` | Comma-separated extra CORS origins | _(empty)_ |
 
 ---
