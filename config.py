@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "data" / "sme_indicators.duckdb"
 PDF_CACHE_DIR = BASE_DIR / "data" / "pdfs"
 
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sme:sme@localhost:5432/sme_indicators")
 
 # BSE API base
 BSE_API_BASE = "https://api.bseindia.com/BseIndiaAPI/api"
@@ -20,8 +20,8 @@ NSE_API_BASE = "https://www.nseindia.com/api"
 NSE_BASE = "https://www.nseindia.com"
 
 # Scraping behaviour
-REQUEST_DELAY = 1.5       # seconds between requests
-REQUEST_TIMEOUT = 30      # seconds
+REQUEST_DELAY = .1       # seconds between requests
+REQUEST_TIMEOUT = 5      # seconds
 MAX_RETRIES = 3
 
 # Default lookback window for scraping (days)

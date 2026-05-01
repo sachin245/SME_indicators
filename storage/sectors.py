@@ -16,9 +16,10 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-import duckdb
+import psycopg2
+import psycopg2.extras
 
-from config import DB_PATH
+from storage.database import get_connection
 
 
 # Order matters: first match wins. Each rule = (sector_label, [keyword,...]).
@@ -110,61 +111,60 @@ def classify_many(names: Iterable[str | None]) -> list[str]:
 
 # ── Backfill helpers ────────────────────────────────────────────────────────
 
-def _connect():
-    return duckdb.connect(str(DB_PATH))
-
-
 def backfill_sectors() -> dict:
     """Walk raw_filings, classify every distinct company, and propagate the
     sector into filing_signals.sector and financials.sector wherever it is
     NULL or 'Unknown'. Idempotent — safe to re-run."""
-    con = _connect()
+    con = get_connection()
     try:
-        rows = con.execute(
-            "SELECT DISTINCT company_code, ANY_VALUE(company_name) AS company_name "
-            "FROM raw_filings WHERE company_code IS NOT NULL GROUP BY company_code"
-        ).fetchall()
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT company_code, MAX(company_name) AS company_name "
+                "FROM raw_filings WHERE company_code IS NOT NULL GROUP BY company_code"
+            )
+            rows = cur.fetchall()
 
-        # Build mapping table in-DB so we can JOIN-update efficiently
         mapping = [(code, classify(name)) for code, name in rows]
-        con.execute(
-            "CREATE OR REPLACE TEMP TABLE _sector_map (company_code VARCHAR, sector VARCHAR)"
-        )
-        con.executemany(
-            "INSERT INTO _sector_map VALUES (?, ?)", mapping
-        )
 
-        # Update filing_signals
-        sig_updated = con.execute("""
-            UPDATE filing_signals fs
-            SET sector = m.sector
-            FROM _sector_map m
-            WHERE fs.company_code = m.company_code
-              AND (fs.sector IS NULL OR fs.sector = '' OR fs.sector = 'Unknown')
-              AND m.sector <> 'Unknown'
-        """).fetchone()
+        with con.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS _sector_map")
+            cur.execute(
+                "CREATE TEMP TABLE _sector_map (company_code VARCHAR, sector VARCHAR)"
+            )
+            psycopg2.extras.execute_values(
+                cur, "INSERT INTO _sector_map VALUES %s", mapping
+            )
 
-        # Update financials
-        fin_updated = con.execute("""
-            UPDATE financials f
-            SET sector = m.sector
-            FROM _sector_map m
-            WHERE f.company_code = m.company_code
-              AND (f.sector IS NULL OR f.sector = '' OR f.sector = 'Unknown')
-              AND m.sector <> 'Unknown'
-        """).fetchone()
+            cur.execute("""
+                UPDATE filing_signals fs
+                SET sector = m.sector
+                FROM _sector_map m
+                WHERE fs.company_code = m.company_code
+                  AND (fs.sector IS NULL OR fs.sector = '' OR fs.sector = 'Unknown')
+                  AND m.sector <> 'Unknown'
+            """)
+            sig_updated = cur.rowcount
 
-        # Distribution after backfill
-        dist = con.execute("""
-            SELECT sector, COUNT(*) AS n
-            FROM filing_signals
-            GROUP BY sector ORDER BY n DESC
-        """).fetchall()
+            cur.execute("""
+                UPDATE financials f
+                SET sector = m.sector
+                FROM _sector_map m
+                WHERE f.company_code = m.company_code
+                  AND (f.sector IS NULL OR f.sector = '' OR f.sector = 'Unknown')
+                  AND m.sector <> 'Unknown'
+            """)
+            fin_updated = cur.rowcount
 
+            cur.execute(
+                "SELECT sector, COUNT(*) AS n FROM filing_signals GROUP BY sector ORDER BY n DESC"
+            )
+            dist = cur.fetchall()
+
+        con.commit()
         return {
             "companies_classified": len(mapping),
-            "filing_signals_updated": sig_updated[0] if sig_updated else 0,
-            "financials_updated": fin_updated[0] if fin_updated else 0,
+            "filing_signals_updated": sig_updated,
+            "financials_updated": fin_updated,
             "sector_distribution": dict(dist),
         }
     finally:

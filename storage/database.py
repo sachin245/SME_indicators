@@ -1,91 +1,100 @@
-import duckdb
+import os
 import pandas as pd
-from config import DB_PATH
+import psycopg2
+import psycopg2.extras
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sme:sme@localhost:5432/sme_indicators")
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(str(DB_PATH))
+def get_connection():
+    return psycopg2.connect(DATABASE_URL)
 
 
 def init_db():
     con = get_connection()
     try:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS raw_filings (
-                id            VARCHAR PRIMARY KEY,
-                exchange      VARCHAR NOT NULL,
-                company_code  VARCHAR NOT NULL,
-                company_name  VARCHAR,
-                filing_date   DATE,
-                category      VARCHAR,
-                subcategory   VARCHAR,
-                headline      VARCHAR,
-                pdf_url       VARCHAR,
-                pdf_local     VARCHAR,
-                raw_json      VARCHAR,
-                scraped_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS financials (
-                id            VARCHAR PRIMARY KEY,
-                filing_id     VARCHAR,
-                company_code  VARCHAR NOT NULL,
-                company_name  VARCHAR,
-                exchange      VARCHAR,
-                period_end    DATE,
-                period_type   VARCHAR,
-                revenue       DOUBLE,
-                ebitda        DOUBLE,
-                pat           DOUBLE,
-                total_debt    DOUBLE,
-                sector        VARCHAR,
-                parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS filing_signals (
-                id            VARCHAR PRIMARY KEY,
-                filing_id     VARCHAR,
-                company_code  VARCHAR,
-                filing_date   DATE,
-                sector        VARCHAR,
-                order_book    BOOLEAN DEFAULT FALSE,
-                capex         BOOLEAN DEFAULT FALSE,
-                credit_stress BOOLEAN DEFAULT FALSE,
-                export        BOOLEAN DEFAULT FALSE,
-                headcount     BOOLEAN DEFAULT FALSE,
-                raw_text      VARCHAR,
-                parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS indicators (
-                id                    VARCHAR PRIMARY KEY,
-                sector                VARCHAR NOT NULL,
-                as_of_date            DATE NOT NULL,
-                revenue_momentum      DOUBLE,
-                margin_pressure       DOUBLE,
-                order_book_signal     DOUBLE,
-                credit_stress         DOUBLE,
-                capex_intentions      DOUBLE,
-                export_outlook        DOUBLE,
-                composite_score       DOUBLE,
-                computed_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        with con.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS raw_filings (
+                    id            VARCHAR PRIMARY KEY,
+                    exchange      VARCHAR NOT NULL,
+                    company_code  VARCHAR NOT NULL,
+                    company_name  VARCHAR,
+                    filing_date   DATE,
+                    category      VARCHAR,
+                    subcategory   VARCHAR,
+                    headline      VARCHAR,
+                    pdf_url       VARCHAR,
+                    pdf_local     VARCHAR,
+                    raw_json      TEXT,
+                    scraped_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS financials (
+                    id            VARCHAR PRIMARY KEY,
+                    filing_id     VARCHAR,
+                    company_code  VARCHAR NOT NULL,
+                    company_name  VARCHAR,
+                    exchange      VARCHAR,
+                    period_end    DATE,
+                    period_type   VARCHAR,
+                    revenue       DOUBLE PRECISION,
+                    ebitda        DOUBLE PRECISION,
+                    pat           DOUBLE PRECISION,
+                    total_debt    DOUBLE PRECISION,
+                    sector        VARCHAR,
+                    parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS filing_signals (
+                    id            VARCHAR PRIMARY KEY,
+                    filing_id     VARCHAR,
+                    company_code  VARCHAR,
+                    filing_date   DATE,
+                    sector        VARCHAR,
+                    order_book    BOOLEAN DEFAULT FALSE,
+                    capex         BOOLEAN DEFAULT FALSE,
+                    credit_stress BOOLEAN DEFAULT FALSE,
+                    export        BOOLEAN DEFAULT FALSE,
+                    headcount     BOOLEAN DEFAULT FALSE,
+                    raw_text      TEXT,
+                    parsed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS indicators (
+                    id                    VARCHAR PRIMARY KEY,
+                    sector                VARCHAR NOT NULL,
+                    as_of_date            DATE NOT NULL,
+                    revenue_momentum      DOUBLE PRECISION,
+                    margin_pressure       DOUBLE PRECISION,
+                    order_book_signal     DOUBLE PRECISION,
+                    credit_stress         DOUBLE PRECISION,
+                    capex_intentions      DOUBLE PRECISION,
+                    export_outlook        DOUBLE PRECISION,
+                    composite_score       DOUBLE PRECISION,
+                    computed_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        con.commit()
     finally:
         con.close()
 
 
-def _upsert(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, pk: str = "id"):
+def _upsert(cur, table: str, df: pd.DataFrame, pk: str = "id"):
     df = df.drop_duplicates(subset=[pk], keep="last")
-    cols = ", ".join(df.columns)
+    cols = list(df.columns)
     ids = df[pk].tolist()
     if ids:
-        placeholders = ", ".join(["?" for _ in ids])
-        con.execute(f"DELETE FROM {table} WHERE {pk} IN ({placeholders})", ids)
-    con.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM df")
+        cur.execute(f"DELETE FROM {table} WHERE {pk} = ANY(%s)", (ids,))
+    rows = [tuple(None if pd.isna(v) else v for v in row) for row in df.itertuples(index=False)]
+    psycopg2.extras.execute_values(
+        cur,
+        f"INSERT INTO {table} ({', '.join(cols)}) VALUES %s",
+        rows,
+    )
 
 
 def _upsert_records(table: str, records: list[dict]):
@@ -94,7 +103,9 @@ def _upsert_records(table: str, records: list[dict]):
     con = get_connection()
     try:
         df = pd.DataFrame(records)
-        _upsert(con, table, df)
+        with con.cursor() as cur:
+            _upsert(cur, table, df)
+        con.commit()
     finally:
         con.close()
 
@@ -118,6 +129,10 @@ def upsert_indicators(records: list[dict]):
 def query(sql: str, params=None) -> pd.DataFrame:
     con = get_connection()
     try:
-        return con.execute(sql, params or []).df()
+        with con.cursor() as cur:
+            cur.execute(sql, params or [])
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            return pd.DataFrame(rows, columns=cols)
     finally:
         con.close()
